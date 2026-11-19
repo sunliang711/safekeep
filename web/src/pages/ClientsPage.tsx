@@ -35,6 +35,7 @@ export const ClientsPage: React.FC = () => {
   const [saving, setSaving] = useState(false)
   const [revealedKey, setRevealedKey] = useState<string | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
+  const [guideTab, setGuideTab] = useState<'sync-upload' | 'async-upload' | 'raw-stream' | 'query-download'>('sync-upload')
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
@@ -220,26 +221,35 @@ export const ClientsPage: React.FC = () => {
         }
         const examples = [
           {
-            id: 'sync-upload',
-            title: '1. 同步上传（mode=sync，等待结果；超时自动转后台）',
+            id: 'sync-upload' as const,
+            label: '1. 同步上传',
+            title: '同步上传（mode=sync，等待结果；超时自动转后台）',
+            desc: '适合中小文件或需要立即确认备份结果的场景；超过系统同步超时时间后自动转为后台异步执行并返回 202。',
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=daily" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -F "file=@./backup.tar.gz"`,
           },
           {
-            id: 'async-upload',
-            title: '2. 异步上传并指定目标上游（省略 mode 则使用客户默认传输模式）',
+            id: 'async-upload' as const,
+            label: '2. 异步上传',
+            title: '异步上传并指定目标上游（省略 mode 则使用客户默认传输模式）',
+            desc: '流式落盘后立即返回 202 Accepted 与 task_id；可通过 targets 指定该客户已绑定上游的子集。',
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=async&targets=prod-s3,dropbox" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -F "file=@./archive.zip" \\\n  -F 'metadata={"env":"prod","source":"cron"}'`,
           },
           {
-            id: 'raw-stream',
-            title: '3. 原始二进制流上传（非 multipart，通过 Header 指定文件名）',
+            id: 'raw-stream' as const,
+            label: '3. 原始二进制流上传',
+            title: '原始二进制流上传（非 multipart，通过 Header 指定文件名）',
+            desc: '直接将文件内容作为请求体流式上传，使用 X-File-Name 传递文件名（参数也可用 X-Backup-Mode / X-Backup-Path 请求头）。',
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=logs" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -H "X-File-Name: app.log" \\\n  --data-binary @./app.log`,
           },
           {
-            id: 'query-download',
-            title: '4. 查询任务列表 / 任务详情 / 下载恢复 / 查看可用上游',
+            id: 'query-download' as const,
+            label: '4. 查询与下载恢复',
+            title: '查询任务列表 / 任务详情 / 下载恢复 / 查看可用上游',
+            desc: '按客户 API Key 隔离查询自身任务记录与上游绑定列表，并可直接通过网关回源下载恢复文件。',
             cmd: `# 查询当前客户的任务列表\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups?limit=20"\n\n# 查询单个任务状态\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups/<task_id>"\n\n# 下载恢复文件（可选 ?upstream_id=... 指定回源上游）\ncurl -H "X-API-Key: ${sampleKey}" -o restored.bin "${baseUrl}/api/v1/backups/<task_id>/download"\n\n# 查看当前 Key 绑定的可用上游\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/upstreams"`,
           },
         ]
+        const activeExample = examples.find((ex) => ex.id === guideTab) || examples[0]
 
         return (
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -261,7 +271,7 @@ export const ClientsPage: React.FC = () => {
             </button>
 
             {guideOpen && (
-              <div className="px-4 pb-4 pt-2 border-t border-slate-100 space-y-4 text-xs">
+              <div className="px-4 pb-4 pt-3 border-t border-slate-100 space-y-3 text-xs">
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 space-y-1">
                   <div>
                     <span className="font-semibold text-slate-800">鉴权方式：</span>
@@ -277,32 +287,51 @@ export const ClientsPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  {examples.map((ex) => (
-                    <div key={ex.id} className="border border-slate-200 rounded-lg overflow-hidden bg-slate-900 text-slate-100">
-                      <div className="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700">
-                        <span className="text-[11px] font-medium text-slate-200">{ex.title}</span>
-                        <button
-                          type="button"
-                          onClick={() => copyCmd(ex.id, ex.cmd)}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-[11px] text-white shrink-0"
-                        >
-                          {copiedId === ex.id ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-400" />
-                              <span>已复制</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3 h-3" />
-                              <span>复制</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                      <pre className="p-3 font-mono text-[11px] leading-relaxed overflow-x-auto text-emerald-300">{ex.cmd}</pre>
+                <div className="flex flex-wrap gap-1.5 border-b border-slate-200 pb-2">
+                  {examples.map((ex) => {
+                    const active = ex.id === activeExample.id
+                    return (
+                      <button
+                        key={ex.id}
+                        type="button"
+                        onClick={() => setGuideTab(ex.id)}
+                        className={`px-3 py-1.5 rounded-lg font-medium transition ${
+                          active
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                        }`}
+                      >
+                        {ex.label}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-slate-600">{activeExample.desc}</div>
+                  <div className="border border-slate-200 rounded-lg overflow-hidden bg-slate-900 text-slate-100">
+                    <div className="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700">
+                      <span className="text-[11px] font-medium text-slate-200">{activeExample.title}</span>
+                      <button
+                        type="button"
+                        onClick={() => copyCmd(activeExample.id, activeExample.cmd)}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-[11px] text-white shrink-0"
+                      >
+                        {copiedId === activeExample.id ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-400" />
+                            <span>已复制</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>复制</span>
+                          </>
+                        )}
+                      </button>
                     </div>
-                  ))}
+                    <pre className="p-3 font-mono text-[11px] leading-relaxed overflow-x-auto text-emerald-300">{activeExample.cmd}</pre>
+                  </div>
                 </div>
               </div>
             )}
