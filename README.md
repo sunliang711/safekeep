@@ -49,15 +49,14 @@ docker run -d --name safekeep \
 ### 方式二：从源码构建单二进制
 
 ```bash
-# 1. 构建前端资源到 web/dist
-cd web && npm install && npm run build && cd ..
+# 一键构建前端与 Go 单二进制可执行文件 ./safekeep
+make build
 
-# 2. 编译 Go 单二进制
-go build -o safekeep ./cmd/safekeep
-
-# 3. 启动服务（默认读取 ./config.toml 并监听 :8333）
+# 启动服务（默认读取 ./config.toml 并监听 :8333）
 ./safekeep
 ```
+
+> 常用 `Makefile` 目标：`make build`（默认）、`make run`、`make test`、`make vet`、`make docker`、`make clean`、`make help`。若手动构建，也可分步执行 `cd web && npm ci && npm run build && cd .. && go build -o safekeep ./cmd/safekeep`。
 
 启动后访问 `http://localhost:8333` 完成首次管理员初始化。
 
