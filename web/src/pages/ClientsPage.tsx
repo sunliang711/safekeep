@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Copy, KeyRound, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import type { Client, Upstream } from '../types'
@@ -27,6 +27,8 @@ export const ClientsPage: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<ClientForm | null>(null)
   const [revealedKey, setRevealedKey] = useState<string | null>(null)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [pageErr, setPageErr] = useState('')
 
@@ -178,6 +180,106 @@ export const ClientsPage: React.FC = () => {
       </div>
 
       {pageErr && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-sm">{pageErr}</div>}
+
+      {(() => {
+        const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8333'
+        const sampleKey = 'sk_your_api_key'
+        const copyCmd = (id: string, cmd: string) => {
+          navigator.clipboard?.writeText(cmd)
+          setCopiedId(id)
+          setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1500)
+        }
+        const examples = [
+          {
+            id: 'sync-upload',
+            title: '1. 同步上传（mode=sync，等待结果；超时自动转后台）',
+            cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=daily" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -F "file=@./backup.tar.gz"`,
+          },
+          {
+            id: 'async-upload',
+            title: '2. 异步上传并指定目标上游（省略 mode 则使用客户默认传输模式）',
+            cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=async&targets=prod-s3,dropbox" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -F "file=@./archive.zip" \\\n  -F 'metadata={"env":"prod","source":"cron"}'`,
+          },
+          {
+            id: 'raw-stream',
+            title: '3. 原始二进制流上传（非 multipart，通过 Header 指定文件名）',
+            cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=logs" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -H "X-File-Name: app.log" \\\n  --data-binary @./app.log`,
+          },
+          {
+            id: 'query-download',
+            title: '4. 查询任务列表 / 任务详情 / 下载恢复 / 查看可用上游',
+            cmd: `# 查询当前客户的任务列表\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups?limit=20"\n\n# 查询单个任务状态\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups/<task_id>"\n\n# 下载恢复文件（可选 ?upstream_id=... 指定回源上游）\ncurl -H "X-API-Key: ${sampleKey}" -o restored.bin "${baseUrl}/api/v1/backups/<task_id>/download"\n\n# 查看当前 Key 绑定的可用上游\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/upstreams"`,
+          },
+        ]
+
+        return (
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setGuideOpen((v) => !v)}
+              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-50 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-indigo-600" />
+                <span className="text-sm font-semibold text-slate-800">API Key 调用说明（curl 示例）</span>
+                <span className="text-xs text-slate-400">支持同步 / 异步上传、流式上传、查询与下载恢复</span>
+              </div>
+              {guideOpen ? (
+                <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+              ) : (
+                <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+              )}
+            </button>
+
+            {guideOpen && (
+              <div className="px-4 pb-4 pt-2 border-t border-slate-100 space-y-4 text-xs">
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 space-y-1">
+                  <div>
+                    <span className="font-semibold text-slate-800">鉴权方式：</span>
+                    请求头传 <code className="px-1 py-0.5 bg-white border rounded font-mono">X-API-Key: sk_...</code> 或{' '}
+                    <code className="px-1 py-0.5 bg-white border rounded font-mono">Authorization: Bearer sk_...</code>。
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-800">常用参数：</span>
+                    <code className="px-1 py-0.5 bg-white border rounded font-mono">mode=sync|async</code>（不传时使用客户的“默认传输模式”）、
+                    <code className="px-1 py-0.5 bg-white border rounded font-mono">targets</code>（逗号分隔的上游名称或 ID，需在绑定列表内；留空走默认上游组）、
+                    <code className="px-1 py-0.5 bg-white border rounded font-mono">path</code>（相对子目录）、
+                    <code className="px-1 py-0.5 bg-white border rounded font-mono">dedup=false</code>（跳过 SHA-256 秒传去重）。
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  {examples.map((ex) => (
+                    <div key={ex.id} className="border border-slate-200 rounded-lg overflow-hidden bg-slate-900 text-slate-100">
+                      <div className="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700">
+                        <span className="text-[11px] font-medium text-slate-200">{ex.title}</span>
+                        <button
+                          type="button"
+                          onClick={() => copyCmd(ex.id, ex.cmd)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-[11px] text-white shrink-0"
+                        >
+                          {copiedId === ex.id ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-400" />
+                              <span>已复制</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              <span>复制</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <pre className="p-3 font-mono text-[11px] leading-relaxed overflow-x-auto text-emerald-300">{ex.cmd}</pre>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {loading ? (
         <div className="text-sm text-slate-500">加载中...</div>
