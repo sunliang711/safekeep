@@ -506,7 +506,7 @@ func (s *Server) handleTestSMTPSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg.Enabled = true
 
-	sendCtx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	sendCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	sendErr := notify.Send(sendCtx, cfg, "[SafeKeep] SMTP 测试邮件", fmt.Sprintf("这是一封来自 SafeKeep 的 SMTP 测试邮件。\n\n触发管理员: %s\n时间: %s\n", admin.Username, time.Now().Format(time.RFC3339)))
 	detail := map[string]any{"host": cfg.Host, "port": cfg.Port, "to": cfg.ToEmails}

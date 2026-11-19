@@ -301,3 +301,42 @@ func TestSMTPSendDisplayNameAndAuthLogin(t *testing.T) {
 		t.Fatalf("expected clean RCPT TO <ops@safekeep.local>, got %q", gotTo)
 	}
 }
+
+func TestSMTPSendRespectsCallerTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// Accept connection and intentionally never send 220 banner.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		time.Sleep(500 * time.Millisecond)
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = Send(ctx, SMTPConfig{
+		Enabled:   true,
+		Host:      host,
+		Port:      port,
+		TLSMode:   "none",
+		FromEmail: "alerts@safekeep.local",
+		ToEmails:  []string{"ops@safekeep.local"},
+	}, "timeout", "test")
+	if err == nil {
+		t.Fatal("expected timeout error from unresponsive SMTP server")
+	}
+	if time.Since(start) >= time.Second {
+		t.Fatalf("expected Send to abort promptly on caller context deadline, took %v", time.Since(start))
+	}
+}

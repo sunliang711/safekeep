@@ -659,7 +659,7 @@ export const SettingsPage: React.FC = () => {
                     {smtpTesting && (
                       <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 text-xs flex items-center gap-2">
                         <Loader2 className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
-                        <span>正在连接 SMTP 服务器并发送测试邮件，请稍候...</span>
+                        <span>正在连接 SMTP 服务器并发送测试邮件（超时 5 秒），请稍候...</span>
                       </div>
                     )}
 
