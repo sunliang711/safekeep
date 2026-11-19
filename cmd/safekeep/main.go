@@ -28,13 +28,25 @@ import (
 )
 
 func main() {
-	var boot config.BootstrapConfig
-	flag.StringVar(&boot.ListenAddr, "listen", envOr("SAFEKEEP_LISTEN", ":8080"), "HTTP listen address")
-	flag.StringVar(&boot.DataDir, "data-dir", envOr("SAFEKEEP_DATA_DIR", "./data"), "Data directory for SQLite, master key, and spool")
-	flag.StringVar(&boot.MasterKeyHex, "master-key", os.Getenv("SAFEKEEP_MASTER_KEY"), "Optional 32-byte master key (64 hex chars or base64)")
+	var configFlag, listenFlag, dataDirFlag, masterKeyFlag string
+	flag.StringVar(&configFlag, "config", "", "Path to config.toml (or set SAFEKEEP_CONFIG)")
+	flag.StringVar(&listenFlag, "listen", config.DefaultListenAddr, "HTTP listen address (overrides SAFEKEEP_LISTEN and config.toml)")
+	flag.StringVar(&dataDirFlag, "data-dir", "./data", "Data directory for SQLite, master key, and spool")
+	flag.StringVar(&masterKeyFlag, "master-key", "", "Optional 32-byte master key (64 hex chars or base64)")
 	flag.Parse()
 
+	cliOverrides := map[string]string{}
+	flag.Visit(func(f *flag.Flag) {
+		cliOverrides[f.Name] = f.Value.String()
+	})
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	boot, err := config.Load(configFlag, cliOverrides)
+	if err != nil {
+		logger.Error("load config failed", "err", err)
+		os.Exit(1)
+	}
 
 	masterKey, err := config.EnsureMasterKey(boot.DataDir, boot.MasterKeyHex)
 	if err != nil {
@@ -48,7 +60,7 @@ func main() {
 	}
 
 	dbPath := filepath.Join(boot.DataDir, "safekeep.db")
-	store, err := db.Open(dbPath, boot.DataDir)
+	store, err := db.OpenWithDefaults(dbPath, boot.DataDir, boot.Defaults)
 	if err != nil {
 		logger.Error("open database failed", "err", err)
 		os.Exit(1)
@@ -59,6 +71,13 @@ func main() {
 	if err != nil {
 		logger.Error("load system settings failed", "err", err)
 		os.Exit(1)
+	}
+	if overridden, changed := config.ApplyEnvOverrides(settings); changed {
+		if err := store.UpdateSystemSettings(context.Background(), overridden, "env"); err != nil {
+			logger.Error("apply environment overrides failed", "err", err)
+			os.Exit(1)
+		}
+		settings = overridden
 	}
 	_ = os.MkdirAll(settings.SpoolDir, 0o750)
 
@@ -89,6 +108,7 @@ func main() {
 	}
 
 	srv := server.New(store, cipher, registry, backupSvc, pool, sched, migSvc, auditLog, logger, webFS)
+	srv.SetCORSOrigins(boot.CORSAllowedOrigins)
 	httpSrv := &http.Server{
 		Addr:              boot.ListenAddr,
 		Handler:           srv.Router(),
@@ -96,7 +116,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("SafeKeep HTTP server listening", "addr", boot.ListenAddr, "data_dir", boot.DataDir)
+		logger.Info("SafeKeep HTTP server listening", "addr", boot.ListenAddr, "data_dir", boot.DataDir, "config", boot.ConfigPath)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server error", "err", err)
 			os.Exit(1)
@@ -116,11 +136,4 @@ func main() {
 	pool.Wait()
 	backupSvc.Wait()
 	logger.Info("SafeKeep stopped")
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

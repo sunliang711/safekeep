@@ -1,0 +1,28 @@
+# SafeKeep 默认配置文件
+# 优先级：命令行参数 > 环境变量 (SAFEKEEP_*) > config.toml > 内置默认值
+
+[server]
+# HTTP 服务监听地址
+listen = ":8333"
+# SQLite 数据库、主密钥 (master.key) 等持久化数据目录
+data_dir = "./data"
+# 可选：32 字节加密主密钥（64 位十六进制或 Base64）；留空则自动在 data_dir 下生成 master.key
+master_key = ""
+# 可选：允许跨域访问管理端或 API 的前端 Origin 白名单
+cors_allowed_origins = []
+
+[defaults]
+# 对外访问基准地址（用于 Dropbox OAuth2 回调与同源校验）
+public_base_url = "http://localhost:8333"
+# 临时文件缓冲目录（建议为 data_dir 的子目录）
+spool_dir = "./data/spool"
+# 默认单文件上传大小上限（字节，536870912 = 512 MiB）
+max_file_size_bytes = 536870912
+# 本地缓冲目录总容量上限（字节，10737418240 = 10 GiB，0 表示不限）
+max_spool_bytes = 10737418240
+# 后台异步上传 Worker 并发数
+worker_concurrency = 4
+# 同步模式超时秒数（超时后自动转为后台异步执行并返回 202）
+sync_timeout_sec = 60
+# 异步上传失败最大重试次数
+max_retry_attempts = 3

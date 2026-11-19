@@ -21,6 +21,11 @@ type Store struct {
 
 // Open opens (or creates) the SQLite database in WAL mode, runs migrations, and seeds defaults.
 func Open(dbPath, dataDir string) (*Store, error) {
+	return OpenWithDefaults(dbPath, dataDir, config.DefaultSystemSettings(dataDir))
+}
+
+// OpenWithDefaults opens (or creates) the SQLite database and seeds system_settings with the provided defaults.
+func OpenWithDefaults(dbPath, dataDir string, defaults config.SystemSettings) (*Store, error) {
 	sqldb, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -49,7 +54,7 @@ func Open(dbPath, dataDir string) (*Store, error) {
 		_ = sqldb.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
-	if err := s.seedDefaults(context.Background()); err != nil {
+	if err := s.seedDefaults(context.Background(), defaults); err != nil {
 		_ = sqldb.Close()
 		return nil, fmt.Errorf("seed defaults: %w", err)
 	}
@@ -232,9 +237,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) seedDefaults(ctx context.Context) error {
+func (s *Store) seedDefaults(ctx context.Context, defaults config.SystemSettings) error {
 	now := time.Now().UTC()
-	defaults := config.DefaultSystemSettings(s.dataDir)
 	settingsMap := map[string]any{
 		"spool_dir":           defaults.SpoolDir,
 		"max_file_size_bytes": defaults.MaxFileSizeBytes,

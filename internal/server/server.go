@@ -48,9 +48,10 @@ type Server struct {
 	pool      *queue.WorkerPool
 	sched     *scheduler.Engine
 	migSvc    *migration.Service
-	auditLog  *audit.Logger
-	logger    *slog.Logger
-	webFS     fs.FS
+	auditLog    *audit.Logger
+	logger      *slog.Logger
+	webFS       fs.FS
+	corsOrigins []string
 
 	rateMu      sync.Mutex
 	rateBuckets map[string]*rateWindow
@@ -208,6 +209,11 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
+// SetCORSOrigins configures additional allowed CORS origins (from config.toml or env).
+func (s *Server) SetCORSOrigins(origins []string) {
+	s.corsOrigins = append([]string(nil), origins...)
+}
+
 func (s *Server) isAllowedOrigin(r *http.Request, origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -218,6 +224,11 @@ func (s *Server) isAllowedOrigin(r *http.Request, origin string) bool {
 	}
 	if settings, err := s.store.GetSystemSettings(r.Context()); err == nil && settings.PublicBaseURL != "" {
 		if pub, pErr := url.Parse(settings.PublicBaseURL); pErr == nil && strings.EqualFold(pub.Scheme+"://"+pub.Host, u.Scheme+"://"+u.Host) {
+			return true
+		}
+	}
+	for _, item := range s.corsOrigins {
+		if strings.EqualFold(strings.TrimSpace(item), origin) {
 			return true
 		}
 	}
