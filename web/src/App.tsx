@@ -87,7 +87,7 @@ export function App() {
       }}
     >
       {tab === 'dashboard' && <DashboardPage />}
-      {tab === 'tasks' && <TasksPage />}
+      {tab === 'tasks' && <TasksPage onNavigate={navigate} />}
       {tab === 'upstreams' && <UpstreamsPage />}
       {tab === 'clients' && <ClientsPage />}
       {tab === 'cron' && <CronPage />}

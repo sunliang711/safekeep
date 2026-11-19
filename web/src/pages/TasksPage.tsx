@@ -1,10 +1,15 @@
 import React, { useEffect, useState } from 'react'
-import { CheckCircle2, Download, RotateCcw, Search, Upload, XCircle } from 'lucide-react'
+import { CheckCircle2, Download, RotateCcw, Search, Upload, X, XCircle } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
-import type { BackupTask, Client } from '../types'
+import type { NavTab } from '../components/Layout'
+import type { BackupTask, Client, Upstream } from '../types'
 
-export const TasksPage: React.FC = () => {
+interface TasksPageProps {
+  onNavigate?: (tab: NavTab) => void
+}
+
+export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
   const [tasks, setTasks] = useState<BackupTask[]>([])
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -18,6 +23,9 @@ export const TasksPage: React.FC = () => {
   // Web Upload modal state (mirrors client API behavior)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [clients, setClients] = useState<Client[]>([])
+  const [allClientNames, setAllClientNames] = useState<string[]>([])
+  const [enabledUpstreams, setEnabledUpstreams] = useState<Upstream[]>([])
+  const [creatingDefaultClient, setCreatingDefaultClient] = useState(false)
   const [upClientId, setUpClientId] = useState('')
   const [upMode, setUpMode] = useState<'sync' | 'async'>('sync')
   const [upSubpath, setUpSubpath] = useState('')
@@ -49,26 +57,70 @@ export const TasksPage: React.FC = () => {
     load(0)
   }, [status, mode])
 
+  const loadUploadMeta = async () => {
+    const [cRes, uRes] = await Promise.all([api.listClients(), api.listUpstreams()])
+    const allClients = cRes.items || []
+    setAllClientNames(allClients.map((c) => c.name))
+    const enabledClients = allClients.filter((c) => c.enabled)
+    setClients(enabledClients)
+    setEnabledUpstreams((uRes.items || []).filter((u) => u.enabled))
+    if (enabledClients.length > 0) {
+      const first = enabledClients[0]
+      setUpClientId(first.id)
+      setUpMode(first.default_mode || 'sync')
+      setUpTargets((first.upstreams || []).filter((u) => u.is_default).map((u) => u.upstream_id))
+    } else {
+      setUpClientId('')
+      setUpTargets([])
+    }
+  }
+
   const openUploadModal = async () => {
     setUploadErr('')
     setUploadResult(null)
     setUpFile(null)
     setUploadOpen(true)
     try {
-      const res = await api.listClients()
-      const enabledClients = (res.items || []).filter((c) => c.enabled)
-      setClients(enabledClients)
-      if (enabledClients.length > 0) {
-        const first = enabledClients[0]
-        setUpClientId(first.id)
-        setUpMode(first.default_mode || 'sync')
-        setUpTargets((first.upstreams || []).filter((u) => u.is_default).map((u) => u.upstream_id))
-      } else {
-        setUpClientId('')
-        setUpTargets([])
-      }
+      await loadUploadMeta()
     } catch (err: any) {
-      setUploadErr(err.message || '加载客户列表失败')
+      setUploadErr(err.message || '加载客户或上游列表失败')
+    }
+  }
+
+  const handleCreateDefaultClient = async () => {
+    if (enabledUpstreams.length === 0) return
+    setUploadErr('')
+    setCreatingDefaultClient(true)
+    try {
+      const existing = new Set(allClientNames)
+      let name = 'web-admin'
+      let idx = 2
+      while (existing.has(name)) {
+        name = `web-admin-${idx++}`
+      }
+      await api.createClient({
+        name,
+        description: 'Web 管理端默认上传客户',
+        enabled: true,
+        default_mode: 'sync',
+        path_prefix: '',
+        max_file_size_bytes: 0,
+        allowed_mime_types: [],
+        rate_limit_rpm: 0,
+        webhook_url: '',
+        webhook_secret: '',
+        expires_at: null,
+        upstreams: enabledUpstreams.map((u, i) => ({
+          upstream_id: u.id,
+          is_default: true,
+          priority: (i + 1) * 10,
+        })),
+      })
+      await loadUploadMeta()
+    } catch (err: any) {
+      setUploadErr(err.message || '自动创建默认客户失败')
+    } finally {
+      setCreatingDefaultClient(false)
     }
   }
 
@@ -344,18 +396,116 @@ export const TasksPage: React.FC = () => {
       )}
 
       {uploadOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !uploading && !creatingDefaultClient) {
+              setUploadOpen(false)
+            }
+          }}
+        >
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">上传文件备份</h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                与客户调用备份 API 完全一致：经过单文件大小校验、每日流量熔断、SHA-256 秒传去重、同步/异步分发及审计日志。
-              </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">上传文件备份</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  与客户调用备份 API 完全一致：经过单文件大小校验、每日流量熔断、SHA-256 秒传去重、同步/异步分发及审计日志。
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={uploading || creatingDefaultClient}
+                onClick={() => setUploadOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                aria-label="关闭弹窗"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
             {clients.length === 0 ? (
-              <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
-                当前没有启用的客户配置，请先前往「客户与 API Key」页面创建一个客户并绑定上游存储。
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm space-y-3">
+                  <div>
+                    当前没有启用的客户配置。Web 上传需关联一个客户策略（用于路径前缀隔离、去重索引与审计归属）。
+                  </div>
+                  {enabledUpstreams.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="text-xs text-amber-800">
+                        检测到当前有 {enabledUpstreams.length} 个已启用上游（
+                        {enabledUpstreams.map((u) => u.name).join('、')}
+                        ），您可以直接一键创建默认客户并继续上传：
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={creatingDefaultClient}
+                          onClick={handleCreateDefaultClient}
+                          className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-medium"
+                        >
+                          {creatingDefaultClient ? '创建中...' : '一键创建默认客户并继续上传'}
+                        </button>
+                        {onNavigate && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUploadOpen(false)
+                              onNavigate('clients')
+                            }}
+                            className="px-3.5 py-2 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 rounded-lg text-xs font-medium"
+                          >
+                            前往「客户与 API Key」手动配置
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-xs text-amber-800">
+                        当前尚未配置或启用任何上游存储（如 S3 / Dropbox），请先添加并启用上游存储。
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {onNavigate && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUploadOpen(false)
+                                onNavigate('upstreams')
+                              }}
+                              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium"
+                            >
+                              前往「上游存储配置」
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUploadOpen(false)
+                                onNavigate('clients')
+                              }}
+                              className="px-3.5 py-2 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 rounded-lg text-xs font-medium"
+                            >
+                              前往「客户与 API Key」
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {uploadErr && (
+                  <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                    <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span className="break-all">{uploadErr}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-end pt-2 border-t">
+                  <button type="button" onClick={() => setUploadOpen(false)} className="px-4 py-2 border rounded-lg text-sm">
+                    关闭
+                  </button>
+                </div>
               </div>
             ) : (
               <form onSubmit={handleUpload} className="space-y-4 text-sm">
@@ -393,6 +543,24 @@ export const TasksPage: React.FC = () => {
                     </label>
                   </div>
                 </div>
+
+                {activeClient && activeClient.upstreams.length === 0 && (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center justify-between gap-2">
+                    <span>当前客户「{activeClient.name}」尚未绑定任何上游存储，无法执行上传。</span>
+                    {onNavigate && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUploadOpen(false)
+                          onNavigate('clients')
+                        }}
+                        className="px-2.5 py-1 bg-white border border-amber-300 hover:bg-amber-100 rounded text-amber-900 font-medium shrink-0"
+                      >
+                        前往绑定上游
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {activeClient && activeClient.upstreams.length > 0 && (
                   <div>
@@ -489,12 +657,17 @@ export const TasksPage: React.FC = () => {
                 )}
 
                 <div className="flex justify-end gap-2 pt-2 border-t">
-                  <button type="button" onClick={() => setUploadOpen(false)} className="px-4 py-2 border rounded-lg">
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => setUploadOpen(false)}
+                    className="px-4 py-2 border rounded-lg disabled:opacity-50"
+                  >
                     关闭
                   </button>
                   <button
                     type="submit"
-                    disabled={uploading || !upClientId}
+                    disabled={uploading || !upClientId || !activeClient || activeClient.upstreams.length === 0}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg font-medium"
                   >
                     {uploading ? '上传中...' : '开始上传备份'}
