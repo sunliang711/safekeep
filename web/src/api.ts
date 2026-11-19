@@ -89,11 +89,10 @@ export const api = {
   },
   getTask: (id: string) => req<BackupTask>(`/admin/api/v1/tasks/${id}`),
   retryTask: (id: string) => req<BackupTask>(`/admin/api/v1/tasks/${id}/retry`, { method: 'POST' }),
-  testClientUpload: async (apiKey: string, formData: FormData, query: Record<string, string>) => {
-    const qs = new URLSearchParams(query).toString()
-    return req<{ task: BackupTask; timed_out_to_async?: boolean }>(`/api/v1/backups?${qs}`, {
+  adminUploadBackup: async (clientId: string, formData: FormData, query: Record<string, string>) => {
+    const qs = new URLSearchParams({ client_id: clientId, ...query }).toString()
+    return req<{ task: BackupTask; timed_out_to_async?: boolean }>(`/admin/api/v1/backups/upload?${qs}`, {
       method: 'POST',
-      headers: { 'X-API-Key': apiKey },
       body: formData,
     })
   },

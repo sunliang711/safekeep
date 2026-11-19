@@ -154,6 +154,7 @@ func (s *Server) Router() http.Handler {
 			r.Put("/clients/{id}/upstreams", s.handleSetClientUpstreams)
 
 			r.Get("/tasks", s.handleAdminListTasks)
+			r.Post("/backups/upload", s.handleAdminUploadBackup)
 			r.Get("/tasks/{id}", s.handleAdminGetTask)
 			r.Post("/tasks/{id}/retry", s.handleAdminRetryTask)
 			r.Get("/tasks/{id}/download", s.handleAdminDownloadTask)

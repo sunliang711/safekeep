@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { Download, RotateCcw, Search, Upload } from 'lucide-react'
+import { CheckCircle2, Download, RotateCcw, Search, Upload, XCircle } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
-import type { BackupTask } from '../types'
+import type { BackupTask, Client } from '../types'
 
 export const TasksPage: React.FC = () => {
   const [tasks, setTasks] = useState<BackupTask[]>([])
@@ -14,13 +14,20 @@ export const TasksPage: React.FC = () => {
   const [q, setQ] = useState('')
   const [pageErr, setPageErr] = useState('')
   const [selected, setSelected] = useState<BackupTask | null>(null)
+
+  // Web Upload modal state (mirrors client API behavior)
   const [uploadOpen, setUploadOpen] = useState(false)
-  const [testApiKey, setTestApiKey] = useState('')
-  const [testMode, setTestMode] = useState('sync')
-  const [testSubpath, setTestSubpath] = useState('')
-  const [testTargets, setTestTargets] = useState('')
-  const [testFile, setTestFile] = useState<File | null>(null)
-  const [testMsg, setTestMsg] = useState('')
+  const [clients, setClients] = useState<Client[]>([])
+  const [upClientId, setUpClientId] = useState('')
+  const [upMode, setUpMode] = useState<'sync' | 'async'>('sync')
+  const [upSubpath, setUpSubpath] = useState('')
+  const [upTargets, setUpTargets] = useState<string[]>([])
+  const [upDedup, setUpDedup] = useState(true)
+  const [upMetadata, setUpMetadata] = useState('')
+  const [upFile, setUpFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadErr, setUploadErr] = useState('')
+  const [uploadResult, setUploadResult] = useState<{ task: BackupTask; timedOut?: boolean } | null>(null)
 
   const load = async (targetOffset = offset) => {
     setPageErr('')
@@ -42,49 +49,107 @@ export const TasksPage: React.FC = () => {
     load(0)
   }, [status, mode])
 
+  const openUploadModal = async () => {
+    setUploadErr('')
+    setUploadResult(null)
+    setUpFile(null)
+    setUploadOpen(true)
+    try {
+      const res = await api.listClients()
+      const enabledClients = (res.items || []).filter((c) => c.enabled)
+      setClients(enabledClients)
+      if (enabledClients.length > 0) {
+        const first = enabledClients[0]
+        setUpClientId(first.id)
+        setUpMode(first.default_mode || 'sync')
+        setUpTargets((first.upstreams || []).filter((u) => u.is_default).map((u) => u.upstream_id))
+      } else {
+        setUpClientId('')
+        setUpTargets([])
+      }
+    } catch (err: any) {
+      setUploadErr(err.message || '加载客户列表失败')
+    }
+  }
+
+  const onSelectClient = (cid: string) => {
+    setUpClientId(cid)
+    const found = clients.find((c) => c.id === cid)
+    if (found) {
+      setUpMode(found.default_mode || 'sync')
+      setUpTargets((found.upstreams || []).filter((u) => u.is_default).map((u) => u.upstream_id))
+    }
+  }
+
+  // Poll async / timed-out task until terminal state
+  useEffect(() => {
+    if (!uploadOpen || !uploadResult) return
+    const st = uploadResult.task.status
+    if (st !== 'pending' && st !== 'running') return
+    const timer = setInterval(async () => {
+      try {
+        const latest = await api.getTask(uploadResult.task.id)
+        setUploadResult((prev) => (prev ? { ...prev, task: latest } : null))
+        if (latest.status !== 'pending' && latest.status !== 'running') {
+          load()
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    }, 1500)
+    return () => clearInterval(timer)
+  }, [uploadOpen, uploadResult?.task.id, uploadResult?.task.status])
+
   const handleRetry = async (id: string) => {
     const updated = await api.retryTask(id)
     setSelected(updated)
     await load()
   }
 
-  const handleTestUpload = async (e: React.FormEvent) => {
+  const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!testFile || !testApiKey) return
-    setTestMsg('上传中...')
+    if (!upFile || !upClientId) return
+    setUploadErr('')
+    setUploadResult(null)
+    setUploading(true)
     const fd = new FormData()
-    fd.append('file', testFile)
-    const query: Record<string, string> = { mode: testMode }
-    if (testSubpath) query.path = testSubpath
-    if (testTargets) query.targets = testTargets
+    fd.append('file', upFile)
+    if (upMetadata.trim()) {
+      fd.append('metadata', upMetadata.trim())
+    }
+    const query: Record<string, string> = {
+      mode: upMode,
+      dedup: upDedup ? 'true' : 'false',
+    }
+    if (upSubpath.trim()) query.path = upSubpath.trim()
+    if (upTargets.length > 0) query.targets = upTargets.join(',')
+
     try {
-      const res = await api.testClientUpload(testApiKey, fd, query)
-      setTestMsg(
-        `完成！Task ID: ${res.task.id}，状态: ${res.task.status}${
-          res.task.deduplicated ? '（SHA-256 命中秒传去重）' : ''
-        }${res.timed_out_to_async ? '（同步超时已转后台）' : ''}`,
-      )
-      await load()
+      const res = await api.adminUploadBackup(upClientId, fd, query)
+      setUploadResult({ task: res.task, timedOut: res.timed_out_to_async })
+      await load(0)
+      setOffset(0)
     } catch (err: any) {
-      setTestMsg(`失败: ${err.message}`)
+      setUploadErr(err.message || '上传失败')
+    } finally {
+      setUploading(false)
     }
   }
+
+  const activeClient = clients.find((c) => c.id === upClientId)
 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-900">备份任务与文件恢复</h1>
-          <p className="text-sm text-slate-500">共 {total} 条备份记录；支持查看多上游明细、重试失败项、代理下载恢复</p>
+          <p className="text-sm text-slate-500">共 {total} 条备份记录；支持 Web 端直接上传备份、查看多上游明细、重试及下载恢复</p>
         </div>
         <button
-          onClick={() => {
-            setTestMsg('')
-            setUploadOpen(true)
-          }}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
+          onClick={openUploadModal}
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
         >
-          <Upload className="w-4 h-4" /> Web 测试上传
+          <Upload className="w-4 h-4" /> 上传文件备份
         </button>
       </div>
 
@@ -94,7 +159,12 @@ export const TasksPage: React.FC = () => {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { setOffset(0); load(0) } }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setOffset(0)
+                load(0)
+              }
+            }}
             placeholder="搜索文件名 / Task ID / SHA-256..."
             className="w-full text-sm focus:outline-none"
           />
@@ -112,7 +182,13 @@ export const TasksPage: React.FC = () => {
           <option value="sync">sync</option>
           <option value="async">async</option>
         </select>
-        <button onClick={() => { setOffset(0); load(0) }} className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-sm">
+        <button
+          onClick={() => {
+            setOffset(0)
+            load(0)
+          }}
+          className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-sm"
+        >
           查询
         </button>
       </div>
@@ -189,14 +265,22 @@ export const TasksPage: React.FC = () => {
         <div className="flex gap-2">
           <button
             disabled={offset === 0}
-            onClick={() => { const next = Math.max(0, offset - limit); setOffset(next); load(next) }}
+            onClick={() => {
+              const next = Math.max(0, offset - limit)
+              setOffset(next)
+              load(next)
+            }}
             className="px-3 py-1.5 bg-white border rounded-lg disabled:opacity-40"
           >
             上一页
           </button>
           <button
             disabled={offset + limit >= total}
-            onClick={() => { const next = offset + limit; setOffset(next); load(next) }}
+            onClick={() => {
+              const next = offset + limit
+              setOffset(next)
+              load(next)
+            }}
             className="px-3 py-1.5 bg-white border rounded-lg disabled:opacity-40"
           >
             下一页
@@ -261,40 +345,163 @@ export const TasksPage: React.FC = () => {
 
       {uploadOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4">
-            <h2 className="text-lg font-bold text-slate-900">模拟客户 API 上传测试</h2>
-            <form onSubmit={handleTestUpload} className="space-y-3 text-sm">
-              <div>
-                <label className="block text-xs text-slate-600 mb-1">客户 API Key *</label>
-                <input required value={testApiKey} onChange={(e) => setTestApiKey(e.target.value)} placeholder="sk_..." className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">上传文件备份</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                与客户调用备份 API 完全一致：经过单文件大小校验、每日流量熔断、SHA-256 秒传去重、同步/异步分发及审计日志。
+              </p>
+            </div>
+
+            {clients.length === 0 ? (
+              <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                当前没有启用的客户配置，请先前往「客户与 API Key」页面创建一个客户并绑定上游存储。
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-slate-600 mb-1">模式</label>
-                  <select value={testMode} onChange={(e) => setTestMode(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg bg-white">
-                    <option value="sync">sync</option>
-                    <option value="async">async</option>
-                  </select>
+            ) : (
+              <form onSubmit={handleUpload} className="space-y-4 text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-600 mb-1">归属客户 / 策略 *</label>
+                    <select
+                      required
+                      value={upClientId}
+                      onChange={(e) => onSelectClient(e.target.value)}
+                      className="w-full px-3 py-1.5 border rounded-lg bg-white"
+                    >
+                      {clients.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} {c.path_prefix ? `(/${c.path_prefix})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-600 mb-1">传输模式</label>
+                    <select value={upMode} onChange={(e) => setUpMode(e.target.value as any)} className="w-full px-3 py-1.5 border rounded-lg bg-white">
+                      <option value="sync">sync（同步等待，超时转后台）</option>
+                      <option value="async">async（异步队列立即返回）</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-600 mb-1">相对子目录（可选）</label>
+                    <input value={upSubpath} onChange={(e) => setUpSubpath(e.target.value)} placeholder="2026/11" className="w-full px-3 py-1.5 border rounded-lg" />
+                  </div>
+                  <div className="flex items-end pb-1.5">
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                      <input type="checkbox" checked={upDedup} onChange={(e) => setUpDedup(e.target.checked)} />
+                      <span>启用 SHA-256 秒传去重</span>
+                    </label>
+                  </div>
                 </div>
+
+                {activeClient && activeClient.upstreams.length > 0 && (
+                  <div>
+                    <label className="block text-xs text-slate-600 mb-1.5">目标上游（已默认选中客户默认组，留空则按客户默认组）</label>
+                    <div className="flex flex-wrap gap-2">
+                      {activeClient.upstreams.map((u) => {
+                        const checked = upTargets.includes(u.upstream_id)
+                        return (
+                          <label
+                            key={u.upstream_id}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs cursor-pointer ${
+                              checked ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-slate-50 border-slate-200 text-slate-600'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setUpTargets([...upTargets, u.upstream_id])
+                                } else {
+                                  setUpTargets(upTargets.filter((id) => id !== u.upstream_id))
+                                }
+                              }}
+                            />
+                            <span>{u.upstream_name}</span>
+                            <span className="text-[10px] opacity-70">({u.upstream_type?.toUpperCase()})</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">子目录（可选）</label>
-                  <input value={testSubpath} onChange={(e) => setTestSubpath(e.target.value)} placeholder="2026/11" className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label className="block text-xs text-slate-600 mb-1">选择文件 *</label>
+                  <input
+                    type="file"
+                    required
+                    onChange={(e) => setUpFile(e.target.files?.[0] || null)}
+                    className="w-full text-xs border rounded-lg p-2 bg-slate-50"
+                  />
+                  {upFile && (
+                    <div className="text-[11px] text-slate-500 mt-1">
+                      已选文件：<span className="font-medium text-slate-700">{upFile.name}</span>（{formatBytes(upFile.size)}）
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-600 mb-1">指定目标上游名称（逗号分隔，留空用默认组）</label>
-                <input value={testTargets} onChange={(e) => setTestTargets(e.target.value)} placeholder="prod-s3,team-dropbox" className="w-full px-3 py-1.5 border rounded-lg" />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-600 mb-1">选择文件 *</label>
-                <input type="file" required onChange={(e) => setTestFile(e.target.files?.[0] || null)} className="w-full text-xs" />
-              </div>
-              {testMsg && <div className="p-2.5 rounded-lg bg-slate-100 text-xs break-all">{testMsg}</div>}
-              <div className="flex justify-end gap-2 pt-2 border-t">
-                <button type="button" onClick={() => setUploadOpen(false)} className="px-4 py-2 border rounded-lg">关闭</button>
-                <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium">发起上传</button>
-              </div>
-            </form>
+
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">自定义 Metadata JSON（可选）</label>
+                  <input
+                    value={upMetadata}
+                    onChange={(e) => setUpMetadata(e.target.value)}
+                    placeholder='{"source":"web","env":"prod"}'
+                    className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs"
+                  />
+                </div>
+
+                {uploadErr && (
+                  <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                    <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span className="break-all">{uploadErr}</span>
+                  </div>
+                )}
+
+                {uploadResult && (
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>任务 {uploadResult.task.id}</span>
+                        {uploadResult.task.deduplicated && (
+                          <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px]">SHA-256 秒传命中</span>
+                        )}
+                        {uploadResult.timedOut && (
+                          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[10px]">同步超时已转后台</span>
+                        )}
+                      </div>
+                      <StatusBadge value={uploadResult.task.status} />
+                    </div>
+                    <div className="space-y-1">
+                      {(uploadResult.task.items || []).map((it) => (
+                        <div key={it.id} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded border">
+                          <div className="min-w-0 truncate mr-2">
+                            <span className="font-medium">{it.upstream_name}</span>
+                            <span className="text-slate-400 font-mono ml-2">{it.remote_path}</span>
+                          </div>
+                          <StatusBadge value={it.status} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2 border-t">
+                  <button type="button" onClick={() => setUploadOpen(false)} className="px-4 py-2 border rounded-lg">
+                    关闭
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={uploading || !upClientId}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg font-medium"
+                  >
+                    {uploading ? '上传中...' : '开始上传备份'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

@@ -20,6 +20,33 @@ import (
 
 func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 	client := currentClient(r)
+	s.executeUploadRequest(w, r, client, "client", client.ID, client.Name, "backup.upload")
+}
+
+func (s *Server) handleAdminUploadBackup(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
+	if clientID == "" {
+		writeError(w, http.StatusBadRequest, "client_id_required", "query parameter client_id is required")
+		return
+	}
+	client, err := s.store.GetClientByID(r.Context(), clientID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "client_not_found", "selected client does not exist")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_client_failed", err.Error())
+		return
+	}
+	if !client.Enabled {
+		writeError(w, http.StatusForbidden, "client_disabled", "selected client is disabled")
+		return
+	}
+	s.executeUploadRequest(w, r, client, "admin", admin.ID, admin.Username, "backup.web_upload")
+}
+
+func (s *Server) executeUploadRequest(w http.ResponseWriter, r *http.Request, client *db.Client, actorType, actorID, actorName, action string) {
 	q := r.URL.Query()
 
 	mode := firstNonEmpty(q.Get("mode"), r.Header.Get("X-Backup-Mode"))
@@ -157,26 +184,26 @@ func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 			code = he.Code
 		}
 		s.auditLog.Record(r.Context(), audit.Event{
-			ActorType:    "client",
-			ActorID:      client.ID,
-			ActorName:    client.Name,
-			Action:       "backup.upload",
+			ActorType:    actorType,
+			ActorID:      actorID,
+			ActorName:    actorName,
+			Action:       action,
 			ResourceType: "backup_task",
 			Status:       "failure",
 			IPAddress:    clientIP(r),
 			UserAgent:    r.UserAgent(),
 			RequestID:    middleware.GetReqID(r.Context()),
-			Detail:       map[string]any{"filename": filename, "error": err.Error()},
+			Detail:       map[string]any{"client_id": client.ID, "client_name": client.Name, "filename": filename, "error": err.Error()},
 		})
 		writeError(w, status, code, err.Error())
 		return
 	}
 
 	s.auditLog.Record(r.Context(), audit.Event{
-		ActorType:    "client",
-		ActorID:      client.ID,
-		ActorName:    client.Name,
-		Action:       "backup.upload",
+		ActorType:    actorType,
+		ActorID:      actorID,
+		ActorName:    actorName,
+		Action:       action,
 		ResourceType: "backup_task",
 		ResourceID:   res.Task.ID,
 		Status:       "success",
@@ -184,6 +211,8 @@ func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
 		Detail: map[string]any{
+			"client_id":         client.ID,
+			"client_name":       client.Name,
 			"filename":          res.Task.OriginalFilename,
 			"file_size":         res.Task.FileSize,
 			"sha256":            res.Task.SHA256,

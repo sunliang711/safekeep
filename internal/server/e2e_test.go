@@ -665,4 +665,26 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	if okAfterReset.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 after circuit breaker reset, got %d", okAfterReset.StatusCode)
 	}
+
+	// 15. Admin Web upload endpoint (/admin/api/v1/backups/upload) mirrors client API behavior
+	var webBuf bytes.Buffer
+	wmw := multipart.NewWriter(&webBuf)
+	wfw, _ := wmw.CreateFormFile("file", "web-upload.txt")
+	_, _ = wfw.Write([]byte("hello from web ui"))
+	_ = wmw.Close()
+	webReq, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/admin/api/v1/backups/upload?client_id="+clOut.Client.ID+"&mode=sync&path=web", &webBuf)
+	webReq.Header.Set("Content-Type", wmw.FormDataContentType())
+	for _, c := range env.cookies {
+		webReq.AddCookie(c)
+	}
+	webResp, err := http.DefaultClient.Do(webReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var webOut backup.UploadResponse
+	_ = json.NewDecoder(webResp.Body).Decode(&webOut)
+	webResp.Body.Close()
+	if webResp.StatusCode != http.StatusOK || webOut.Task.Status != "succeeded" || len(webOut.Task.Items) != 2 {
+		t.Fatalf("expected web upload 200 succeeded across 2 upstreams, got %d %+v", webResp.StatusCode, webOut.Task)
+	}
 }
