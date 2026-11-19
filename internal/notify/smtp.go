@@ -1,17 +1,24 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// Timeout caps a single SMTP delivery attempt.
+const Timeout = 20 * time.Second
 
 // SMTPConfig defines outbound email alerting configuration.
 type SMTPConfig struct {
@@ -45,11 +52,11 @@ func (c SMTPConfig) Validate() error {
 	if mode != "starttls" && mode != "tls" && mode != "none" {
 		return fmt.Errorf("unsupported smtp tls_mode %q (must be starttls, tls, or none)", c.TLSMode)
 	}
-	if strings.TrimSpace(c.FromEmail) == "" {
-		return errors.New("smtp from_email is required")
+	if _, err := parseSender(c.FromEmail, c.FromName); err != nil {
+		return fmt.Errorf("invalid smtp from_email: %w", err)
 	}
-	if len(cleanEmails(c.ToEmails)) == 0 {
-		return errors.New("at least one recipient in to_emails is required")
+	if _, err := parseRecipients(c.ToEmails); err != nil {
+		return err
 	}
 	return nil
 }
@@ -63,34 +70,45 @@ func Send(ctx context.Context, cfg SMTPConfig, subject, body string) error {
 		return err
 	}
 
-	recipients := cleanEmails(cfg.ToEmails)
-	addr := net.JoinHostPort(strings.TrimSpace(cfg.Host), strconv.Itoa(cfg.Port))
+	fromAddr, err := parseSender(cfg.FromEmail, cfg.FromName)
+	if err != nil {
+		return fmt.Errorf("invalid sender: %w", err)
+	}
+	recipients, err := parseRecipients(cfg.ToEmails)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+
+	host := strings.TrimSpace(cfg.Host)
+	addr := net.JoinHostPort(host, strconv.Itoa(cfg.Port))
 	tlsMode := strings.ToLower(strings.TrimSpace(cfg.TLSMode))
 	if tlsMode == "" {
 		tlsMode = "starttls"
 	}
 
-	dialer := &net.Dialer{Timeout: 15 * time.Second}
-	var conn net.Conn
-	var err error
-
-	tlsCfg := &tls.Config{
-		ServerName: strings.TrimSpace(cfg.Host),
-		MinVersion: tls.VersionTLS12,
-	}
-
-	if tlsMode == "tls" {
-		conn, err = (&tls.Dialer{NetDialer: dialer, Config: tlsCfg}).DialContext(ctx, "tcp", addr)
-	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", addr)
-	}
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("dial smtp %s: %w", addr, err)
 	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 
-	client, err := smtp.NewClient(conn, strings.TrimSpace(cfg.Host))
+	tlsCfg := &tls.Config{
+		ServerName: host,
+		MinVersion: tls.VersionTLS12,
+	}
+	if tlsMode == "tls" {
+		conn = tls.Client(conn, tlsCfg)
+	}
+
+	client, err := smtp.NewClient(conn, host)
 	if err != nil {
-		_ = conn.Close()
 		return fmt.Errorf("create smtp client: %w", err)
 	}
 	defer client.Close()
@@ -101,99 +119,153 @@ func Send(ctx context.Context, cfg SMTPConfig, subject, body string) error {
 				return fmt.Errorf("smtp starttls: %w", err)
 			}
 		} else {
-			return errors.New("smtp server does not support STARTTLS")
+			return errors.New("the server does not support STARTTLS")
 		}
 	}
 
-	if strings.TrimSpace(cfg.Username) != "" {
-		auth := smtp.PlainAuth("", strings.TrimSpace(cfg.Username), cfg.Password, strings.TrimSpace(cfg.Host))
-		if err := client.Auth(auth); err != nil {
+	if username := strings.TrimSpace(cfg.Username); username != "" {
+		if err := authenticateSMTP(client, username, cfg.Password, host, tlsMode != "none"); err != nil {
 			return fmt.Errorf("smtp auth: %w", err)
 		}
 	}
 
-	fromEmail := sanitizeHeader(cfg.FromEmail)
-	if err := client.Mail(fromEmail); err != nil {
+	if err := client.Mail(fromAddr.Address); err != nil {
 		return fmt.Errorf("smtp MAIL FROM: %w", err)
 	}
+	rcptAddrs := make([]string, 0, len(recipients))
 	for _, rcpt := range recipients {
-		if err := client.Rcpt(rcpt); err != nil {
-			return fmt.Errorf("smtp RCPT TO %s: %w", rcpt, err)
+		if err := client.Rcpt(rcpt.Address); err != nil {
+			return fmt.Errorf("smtp RCPT TO %s: %w", rcpt.Address, err)
 		}
+		rcptAddrs = append(rcptAddrs, rcpt.Address)
 	}
 
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("smtp DATA: %w", err)
 	}
-	msg := buildMessage(cfg.FromName, fromEmail, recipients, subject, body)
-	if _, err := w.Write([]byte(msg)); err != nil {
+	msg := buildMessage(fromAddr, rcptAddrs, subject, body, time.Now())
+	if _, err := w.Write(msg); err != nil {
 		_ = w.Close()
 		return fmt.Errorf("write smtp message: %w", err)
 	}
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("commit smtp message: %w", err)
 	}
-	_ = client.Quit()
+	if err := client.Quit(); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
 	return nil
 }
 
-func buildMessage(fromName, fromEmail string, to []string, subject, body string) string {
-	cleanFromName := sanitizeHeader(fromName)
-	fromHeader := fromEmail
-	if cleanFromName != "" {
-		fromHeader = fmt.Sprintf("%s <%s>", encodeMIMEWord(cleanFromName), fromEmail)
-	}
-	headers := []string{
-		"From: " + fromHeader,
-		"To: " + strings.Join(to, ", "),
-		"Subject: " + encodeMIMEWord(sanitizeHeader(subject)),
-		"Date: " + time.Now().UTC().Format(time.RFC1123Z),
-		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=UTF-8",
-		"Content-Transfer-Encoding: base64",
-	}
-	encodedBody := wrapBase64(base64.StdEncoding.EncodeToString([]byte(body)))
-	return strings.Join(headers, "\r\n") + "\r\n\r\n" + encodedBody
-}
-
-func encodeMIMEWord(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] > 127 {
-			return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(s)) + "?="
+func authenticateSMTP(client *smtp.Client, username, password, host string, encrypted bool) error {
+	ok, mechs := client.Extension("AUTH")
+	if ok {
+		upper := " " + strings.ToUpper(mechs) + " "
+		if !strings.Contains(upper, " PLAIN ") && strings.Contains(upper, " LOGIN ") {
+			return client.Auth(&loginAuth{username: username, password: password, encrypted: encrypted})
 		}
 	}
-	return s
+	return client.Auth(smtp.PlainAuth("", username, password, host))
 }
 
-func wrapBase64(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i += 76 {
-		end := i + 76
-		if end > len(s) {
-			end = len(s)
-		}
-		b.WriteString(s[i:end])
-		b.WriteString("\r\n")
+type loginAuth struct {
+	username  string
+	password  string
+	encrypted bool
+}
+
+func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if !server.TLS && !a.encrypted {
+		return "", nil, errors.New("unencrypted connection")
 	}
-	return b.String()
+	return "LOGIN", nil, nil
+}
+
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	prompt := strings.ToLower(strings.TrimSpace(string(fromServer)))
+	switch {
+	case strings.Contains(prompt, "username"):
+		return []byte(a.username), nil
+	case strings.Contains(prompt, "password"):
+		return []byte(a.password), nil
+	default:
+		return nil, fmt.Errorf("unexpected LOGIN challenge: %q", string(fromServer))
+	}
+}
+
+func parseSender(rawEmail, rawName string) (*mail.Address, error) {
+	raw := sanitizeHeader(rawEmail)
+	if raw == "" {
+		return nil, errors.New("from_email is required")
+	}
+	parsed, err := mail.ParseAddress(raw)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(parsed.Name) == "" && strings.TrimSpace(rawName) != "" {
+		parsed.Name = sanitizeHeader(rawName)
+	}
+	return parsed, nil
+}
+
+func parseRecipients(list []string) ([]*mail.Address, error) {
+	var out []*mail.Address
+	seen := make(map[string]bool)
+	for _, raw := range list {
+		cleaned := sanitizeHeader(raw)
+		if cleaned == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(cleaned)
+		if err != nil {
+			return nil, fmt.Errorf("invalid recipient %q: %w", cleaned, err)
+		}
+		key := strings.ToLower(parsed.Address)
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, parsed)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("at least one recipient in to_emails is required")
+	}
+	return out, nil
+}
+
+func buildMessage(from *mail.Address, to []string, subject, body string, at time.Time) []byte {
+	var out bytes.Buffer
+	header := func(name, value string) {
+		fmt.Fprintf(&out, "%s: %s\r\n", name, sanitizeHeader(value))
+	}
+	fromHeader := from.Address
+	if from.Name != "" {
+		fromHeader = fmt.Sprintf("%s <%s>", mime.QEncoding.Encode("utf-8", from.Name), from.Address)
+	}
+	header("From", fromHeader)
+	header("To", strings.Join(to, ", "))
+	header("Subject", mime.QEncoding.Encode("utf-8", subject))
+	header("Date", at.Format(time.RFC1123Z))
+	header("MIME-Version", "1.0")
+	header("Content-Type", "text/plain; charset=utf-8")
+	header("Content-Transfer-Encoding", "base64")
+	out.WriteString("\r\n")
+	writeBase64(&out, []byte(body))
+	return out.Bytes()
+}
+
+func writeBase64(out io.Writer, data []byte) {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	for len(encoded) > 76 {
+		_, _ = io.WriteString(out, encoded[:76]+"\r\n")
+		encoded = encoded[76:]
+	}
+	_, _ = io.WriteString(out, encoded+"\r\n")
 }
 
 func sanitizeHeader(s string) string {
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	return strings.TrimSpace(s)
-}
-
-func cleanEmails(list []string) []string {
-	var out []string
-	seen := make(map[string]bool)
-	for _, raw := range list {
-		e := sanitizeHeader(raw)
-		if e != "" && !seen[e] {
-			seen[e] = true
-			out = append(out, e)
-		}
-	}
-	return out
+	return strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(s))
 }

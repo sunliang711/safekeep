@@ -434,7 +434,7 @@ func (s *Server) mergeSMTPRequest(existing notify.SMTPConfig, req smtpUpdateReq)
 	if req.ClearPassword {
 		cfg.Password = ""
 		cfg.PasswordEncrypted = ""
-	} else if req.Password != nil && *req.Password != "" {
+	} else if req.Password != nil && *req.Password != "" && *req.Password != "*****" && *req.Password != "••••••" {
 		cfg.Password = *req.Password
 	} else {
 		cfg.Password = existing.Password

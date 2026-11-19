@@ -119,3 +119,185 @@ func TestSMTPSendPlainMockServer(t *testing.T) {
 		t.Fatalf("unexpected body decoded=%q err=%v", string(decodedBody), err)
 	}
 }
+
+func TestSMTPSendDisplayNameAndAuthLogin(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var mu sync.Mutex
+	var gotFrom, gotTo, gotUser, gotPass string
+	done := make(chan struct{})
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		defer close(done)
+
+		r := bufio.NewReader(conn)
+		_, _ = conn.Write([]byte("220 localhost ESMTP\r\n"))
+
+		inData := false
+		loginStep := 0
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if inData {
+				if line == ".\r\n" {
+					inData = false
+					_, _ = conn.Write([]byte("250 OK\r\n"))
+				}
+				continue
+			}
+			if loginStep == 1 {
+				b, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(line))
+				mu.Lock()
+				gotUser = string(b)
+				mu.Unlock()
+				loginStep = 2
+				_, _ = conn.Write([]byte("334 " + base64.StdEncoding.EncodeToString([]byte("Password:")) + "\r\n"))
+				continue
+			}
+			if loginStep == 2 {
+				b, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(line))
+				mu.Lock()
+				gotPass = string(b)
+				mu.Unlock()
+				loginStep = 0
+				_, _ = conn.Write([]byte("235 Authentication succeeded\r\n"))
+				continue
+			}
+
+			upper := strings.ToUpper(strings.TrimSpace(line))
+			switch {
+			case strings.HasPrefix(upper, "EHLO"):
+				_, _ = conn.Write([]byte("250-localhost\r\n250 AUTH LOGIN\r\n"))
+			case upper == "AUTH LOGIN":
+				loginStep = 1
+				_, _ = conn.Write([]byte("334 " + base64.StdEncoding.EncodeToString([]byte("Username:")) + "\r\n"))
+			case strings.HasPrefix(upper, "MAIL FROM:"):
+				mu.Lock()
+				gotFrom = strings.TrimSpace(line[10:])
+				mu.Unlock()
+				_, _ = conn.Write([]byte("250 OK\r\n"))
+			case strings.HasPrefix(upper, "RCPT TO:"):
+				mu.Lock()
+				gotTo = strings.TrimSpace(line[8:])
+				mu.Unlock()
+				_, _ = conn.Write([]byte("250 OK\r\n"))
+			case upper == "DATA":
+				inData = true
+				_, _ = conn.Write([]byte("354 Start mail input\r\n"))
+			case upper == "QUIT":
+				_, _ = conn.Write([]byte("221 Bye\r\n"))
+				return
+			default:
+				_, _ = conn.Write([]byte("250 OK\r\n"))
+			}
+		}
+	}()
+
+	// Verify LOGIN auth refuses unencrypted connection ("none") when username is set
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	err = Send(context.Background(), SMTPConfig{
+		Enabled:   true,
+		Host:      host,
+		Port:      port,
+		TLSMode:   "none",
+		Username:  "user@example.com",
+		Password:  "secret-pass",
+		FromEmail: "SafeKeep <alerts@safekeep.local>",
+		ToEmails:  []string{"Ops <ops@safekeep.local>"},
+	}, "test", "body")
+	if err == nil || !strings.Contains(err.Error(), "unencrypted") {
+		t.Fatalf("expected unencrypted connection refusal, got %v", err)
+	}
+	<-done
+
+	// Re-test with display names without auth to ensure pure addresses are sent in MAIL FROM / RCPT TO
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln2.Close()
+	done2 := make(chan struct{})
+	go func() {
+		conn, err := ln2.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		defer close(done2)
+		r := bufio.NewReader(conn)
+		_, _ = conn.Write([]byte("220 localhost ESMTP\r\n"))
+		inData := false
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if inData {
+				if line == ".\r\n" {
+					inData = false
+					_, _ = conn.Write([]byte("250 OK\r\n"))
+				}
+				continue
+			}
+			upper := strings.ToUpper(strings.TrimSpace(line))
+			switch {
+			case strings.HasPrefix(upper, "EHLO"):
+				_, _ = conn.Write([]byte("250-localhost\r\n250 OK\r\n"))
+			case strings.HasPrefix(upper, "MAIL FROM:"):
+				mu.Lock()
+				gotFrom = strings.TrimSpace(line[10:])
+				mu.Unlock()
+				_, _ = conn.Write([]byte("250 OK\r\n"))
+			case strings.HasPrefix(upper, "RCPT TO:"):
+				mu.Lock()
+				gotTo = strings.TrimSpace(line[8:])
+				mu.Unlock()
+				_, _ = conn.Write([]byte("250 OK\r\n"))
+			case upper == "DATA":
+				inData = true
+				_, _ = conn.Write([]byte("354 Start mail input\r\n"))
+			case upper == "QUIT":
+				_, _ = conn.Write([]byte("221 Bye\r\n"))
+				return
+			default:
+				_, _ = conn.Write([]byte("250 OK\r\n"))
+			}
+		}
+	}()
+
+	host2, portStr2, _ := net.SplitHostPort(ln2.Addr().String())
+	port2, _ := strconv.Atoi(portStr2)
+	if err := Send(context.Background(), SMTPConfig{
+		Enabled:   true,
+		Host:      host2,
+		Port:      port2,
+		TLSMode:   "none",
+		FromEmail: "SafeKeep <alerts@safekeep.local>",
+		ToEmails:  []string{"Ops <ops@safekeep.local>"},
+	}, "test display", "hello"); err != nil {
+		t.Fatalf("Send display-name failed: %v", err)
+	}
+	<-done2
+	mu.Lock()
+	defer mu.Unlock()
+	_ = gotUser
+	_ = gotPass
+	if gotFrom != "<alerts@safekeep.local>" {
+		t.Fatalf("expected clean MAIL FROM <alerts@safekeep.local>, got %q", gotFrom)
+	}
+	if gotTo != "<ops@safekeep.local>" {
+		t.Fatalf("expected clean RCPT TO <ops@safekeep.local>, got %q", gotTo)
+	}
+}

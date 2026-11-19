@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Check, CheckCircle2, Copy, Eye, EyeOff, Loader2, Mail, SlidersHorizontal, Users, XCircle } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
+import { copyText } from '../utils/clipboard'
 import type { Admin, SystemSettings } from '../types'
 
 type SettingsSubTab = 'general' | 'smtp' | 'admins'
@@ -93,15 +94,15 @@ export const SettingsPage: React.FC = () => {
 
   const smtpPayload = () => ({
     enabled: smtpEnabled,
-    host: smtpHost,
+    host: smtpHost.trim(),
     port: Number(smtpPort),
     tls_mode: smtpTLSMode,
-    username: smtpUsername,
+    username: smtpUsername.trim(),
     ...(smtpClearPassword ? { clear_password: true } : smtpEditingPwd && smtpPassword !== '' ? { password: smtpPassword } : {}),
-    from_email: smtpFromEmail,
-    from_name: smtpFromName,
+    from_email: smtpFromEmail.trim(),
+    from_name: smtpFromName.trim(),
     to_emails: smtpToEmails
-      .split(',')
+      .split(/[,;\n，；]+/)
       .map((s) => s.trim())
       .filter(Boolean),
   })
@@ -124,12 +125,23 @@ export const SettingsPage: React.FC = () => {
     }
   }
 
-  const copySmtpPassword = () => {
+  const copySmtpPassword = async () => {
     const valueToCopy = smtpEditingPwd && smtpPassword !== '' ? smtpPassword : smtpSavedPassword
     if (!valueToCopy) return
-    navigator.clipboard?.writeText(valueToCopy)
-    setSmtpPwdCopied(true)
-    setTimeout(() => setSmtpPwdCopied(false), 1500)
+    try {
+      await copyText(valueToCopy)
+      setSmtpPwdCopied(true)
+      setTimeout(() => setSmtpPwdCopied(false), 1500)
+    } catch (e: any) {
+      setErr(e.message || '复制失败，请点击眼睛图标显示后手动复制')
+    }
+  }
+
+  const changeSmtpTLSMode = (nextMode: 'starttls' | 'tls' | 'none') => {
+    setSmtpTLSMode(nextMode)
+    if (smtpPort === 25 || smtpPort === 587 || smtpPort === 465 || !smtpPort) {
+      setSmtpPort(nextMode === 'tls' ? 465 : nextMode === 'starttls' ? 587 : 25)
+    }
   }
 
   const testSMTP = async () => {
@@ -392,24 +404,48 @@ export const SettingsPage: React.FC = () => {
                       </div>
                       <div>
                         <label className="block text-xs text-slate-600 mb-1">加密方式</label>
-                        <select
-                          value={smtpTLSMode}
-                          onChange={(e) => setSmtpTLSMode(e.target.value as any)}
-                          className="w-full px-3 py-1.5 border rounded-lg bg-white"
-                        >
-                          <option value="starttls">STARTTLS (常用 587)</option>
-                          <option value="tls">SSL/TLS 直连 (常用 465)</option>
-                          <option value="none">不加密 (内网/测试 25)</option>
-                        </select>
+                        <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden bg-slate-50 w-full">
+                          {(
+                            [
+                              { value: 'none', label: '无 (25)' },
+                              { value: 'starttls', label: 'STARTTLS (587)' },
+                              { value: 'tls', label: 'TLS (465)' },
+                            ] as const
+                          ).map((opt) => {
+                            const active = smtpTLSMode === opt.value
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => changeSmtpTLSMode(opt.value)}
+                                className={`flex-1 px-2.5 py-1.5 text-xs font-medium transition border-r last:border-r-0 border-slate-300 ${
+                                  active ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {smtpPort === 465 && smtpTLSMode !== 'tls' && (
+                          <div className="text-[11px] text-amber-700 mt-1">提示：465 端口通常需选择「TLS」直连加密，否则握手会失败。</div>
+                        )}
+                        {smtpPort === 587 && smtpTLSMode === 'tls' && (
+                          <div className="text-[11px] text-amber-700 mt-1">提示：587 端口通常使用「STARTTLS」加密。</div>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs text-slate-600 mb-1">SMTP 用户名</label>
                         <input
                           value={smtpUsername}
                           onChange={(e) => setSmtpUsername(e.target.value)}
-                          placeholder="alerts@example.com"
+                          placeholder="alerts@example.com（可留空不认证）"
                           className="w-full px-3 py-1.5 border rounded-lg"
                         />
+                        <div className="text-[11px] text-slate-400 mt-1">可留空（不认证）；未加密（无）连接不能使用密码认证</div>
+                        {smtpTLSMode === 'none' && smtpUsername.trim() !== '' && (
+                          <div className="text-[11px] text-amber-700 mt-0.5">当前选择「无」加密，认证请求会被拒绝，请改用 STARTTLS/TLS 或清空用户名。</div>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs text-slate-600 mb-1">
@@ -511,16 +547,16 @@ export const SettingsPage: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-slate-600 mb-1">发件人邮箱</label>
+                        <label className="block text-xs text-slate-600 mb-1">发件人邮箱（支持 `名称 &lt;邮箱&gt;`）</label>
                         <input
                           value={smtpFromEmail}
                           onChange={(e) => setSmtpFromEmail(e.target.value)}
-                          placeholder="alerts@example.com"
+                          placeholder="alerts@example.com 或 SafeKeep <alerts@example.com>"
                           className="w-full px-3 py-1.5 border rounded-lg"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-slate-600 mb-1">告警收件人邮箱（多个用逗号分隔）</label>
+                        <label className="block text-xs text-slate-600 mb-1">告警收件人邮箱（多个用逗号、分号或换行分隔）</label>
                         <input
                           value={smtpToEmails}
                           onChange={(e) => setSmtpToEmails(e.target.value)}
