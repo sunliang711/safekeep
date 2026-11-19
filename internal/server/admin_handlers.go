@@ -636,12 +636,15 @@ func (s *Server) handleTestUpstream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) resolveDropboxRedirectURI(r *http.Request) string {
 	settings, _ := s.store.GetSystemSettings(r.Context())
 	baseURL := strings.TrimRight(settings.PublicBaseURL, "/")
-	if baseURL == "" {
+	isDefaultLocal := baseURL == "" || baseURL == "http://localhost:8080" || baseURL == "http://localhost:8333"
+	if isDefaultLocal && r.Host != "" {
 		scheme := "http"
 		if isHTTPS(r) {
 			scheme = "https"
 		}
 		baseURL = scheme + "://" + r.Host
+	} else if baseURL == "" {
+		baseURL = "http://localhost:8333"
 	}
 	return baseURL + "/admin/api/v1/oauth/dropbox/callback"
 }

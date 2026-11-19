@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { CheckCircle2, Link2, Plus, Trash2, Wifi, XCircle } from 'lucide-react'
+import { CheckCircle2, Copy, Link2, Plus, Trash2, Wifi, XCircle } from 'lucide-react'
 import { api } from '../api'
 import { StatusBadge } from '../components/Badge'
 import type { Upstream } from '../types'
@@ -275,6 +275,23 @@ export const UpstreamsPage: React.FC = () => {
                   <>
                     <div>授权状态: {u.config.authorized ? <span className="text-emerald-700 font-medium">已授权 ({u.config.account_email || '已连接'})</span> : <span className="text-amber-700">未授权</span>}</div>
                     <div>根目录: <span className="font-mono">{u.config.root_path || '/'}</span></div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>OAuth 回调 URI:</span>
+                      <code className="font-mono bg-white px-1.5 py-0.5 rounded border text-[11px] break-all">
+                        {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
+                          setMsg({ type: 'ok', text: '已复制 Dropbox Redirect URI，请确保已添加到 Dropbox App Console -> OAuth 2 -> Redirect URIs。' })
+                        }}
+                        className="text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-0.5"
+                        title="复制回调地址"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                    </div>
                   </>
                 )}
                 <div>
@@ -430,6 +447,21 @@ export const UpstreamsPage: React.FC = () => {
                     <div>
                       <label className="block text-xs text-slate-600 mb-1">Refresh Token（可选，也可保存后走 Web OAuth2 获取）</label>
                       <input type="password" value={form.refresh_token} onChange={(e) => setForm({ ...form, refresh_token: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-900 space-y-1">
+                    <div>请在 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b> 中添加以下回调地址：</div>
+                    <div className="flex items-center gap-2">
+                      <code className="font-mono bg-white px-2 py-0.5 rounded border text-[11px] break-all">
+                        {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)}
+                        className="text-sky-700 hover:text-sky-900 inline-flex items-center gap-0.5 font-medium"
+                      >
+                        <Copy className="w-3.5 h-3.5" /> 复制
+                      </button>
                     </div>
                   </div>
                 </div>

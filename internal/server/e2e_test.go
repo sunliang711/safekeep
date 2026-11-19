@@ -489,4 +489,16 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	if staleResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected old session token revoked after password change, got %d", staleResp.StatusCode)
 	}
+
+	// 13. Dropbox OAuth start must derive redirect_uri from request host when public_base_url is default localhost
+	oauthStartResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/upstreams/"+upDbx.ID+"/oauth/dropbox/start", nil)
+	var oauthOut struct {
+		RedirectURI string `json:"redirect_uri"`
+	}
+	_ = json.NewDecoder(oauthStartResp.Body).Decode(&oauthOut)
+	oauthStartResp.Body.Close()
+	expectedRedirect := env.srv.URL + "/admin/api/v1/oauth/dropbox/callback"
+	if oauthStartResp.StatusCode != http.StatusOK || oauthOut.RedirectURI != expectedRedirect {
+		t.Fatalf("expected redirect_uri %q, got status=%d redirect_uri=%q", expectedRedirect, oauthStartResp.StatusCode, oauthOut.RedirectURI)
+	}
 }

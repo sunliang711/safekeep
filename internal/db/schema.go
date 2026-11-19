@@ -262,6 +262,15 @@ func (s *Store) seedDefaults(ctx context.Context, defaults config.SystemSettings
 		}
 	}
 
+	// Migrate legacy system-seeded port 8080 public_base_url to the new default (8333).
+	if rawNew, err := json.Marshal(defaults.PublicBaseURL); err == nil {
+		_, _ = s.db.ExecContext(ctx,
+			`UPDATE system_settings SET value_json = ?, updated_at = ?
+			 WHERE key = 'public_base_url' AND value_json = '"http://localhost:8080"' AND updated_by = 'system'`,
+			string(rawNew), now,
+		)
+	}
+
 	defaultJobs := []struct {
 		key, name, desc, expr, cfg string
 	}{
