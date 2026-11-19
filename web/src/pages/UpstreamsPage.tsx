@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import { CheckCircle2, Copy, Link2, Plus, Trash2, Wifi, XCircle } from 'lucide-react'
+import { Copy, Link2, Plus, Trash2, Wifi } from 'lucide-react'
 import { api } from '../api'
 import { StatusBadge } from '../components/Badge'
+import { useToast } from '../components/Toast'
+import { copyText } from '../utils/clipboard'
 import type { Upstream } from '../types'
 
 interface FormState {
@@ -59,11 +61,13 @@ const emptyForm = (): FormState => ({
 })
 
 export const UpstreamsPage: React.FC = () => {
+  const toast = useToast()
   const [items, setItems] = useState<Upstream[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<FormState>(emptyForm())
-  const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [initialFormSnap, setInitialFormSnap] = useState('')
+  const [saving, setSaving] = useState(false)
   const [modalErr, setModalErr] = useState('')
   const [testingId, setTestingId] = useState<string | null>(null)
 
@@ -73,7 +77,7 @@ export const UpstreamsPage: React.FC = () => {
       const res = await api.listUpstreams()
       setItems(res.items || [])
     } catch (err: any) {
-      setMsg({ type: 'err', text: err.message || '加载上游失败' })
+      toast.error(err.message || '加载上游失败')
     } finally {
       setLoading(false)
     }
@@ -83,17 +87,17 @@ export const UpstreamsPage: React.FC = () => {
     load()
     const params = new URLSearchParams(window.location.search)
     if (params.get('oauth') === 'success') {
-      setMsg({ type: 'ok', text: 'Dropbox OAuth2 授权成功，Token 已加密保存。' })
+      toast.success('Dropbox OAuth2 授权成功，Token 已加密保存。')
       window.history.replaceState({}, '', '/upstreams')
     } else if (params.get('oauth') === 'error') {
-      setMsg({ type: 'err', text: `Dropbox OAuth2 授权失败: ${params.get('reason') || '未知错误'}` })
+      toast.error(`Dropbox OAuth2 授权失败: ${params.get('reason') || '未知错误'}`)
       window.history.replaceState({}, '', '/upstreams')
     }
   }, [])
 
   const openEdit = (u: Upstream) => {
     setModalErr('')
-    setForm({
+    const nextForm: FormState = {
       id: u.id,
       name: u.name,
       type: u.type,
@@ -117,14 +121,19 @@ export const UpstreamsPage: React.FC = () => {
       proxy_username: u.proxy_username || '',
       proxy_password: '',
       clear_proxy_password: false,
-    })
+    }
+    setForm(nextForm)
+    setInitialFormSnap(JSON.stringify(nextForm))
     setModalOpen(true)
   }
 
+  const upstreamDirty = !form.id || JSON.stringify(form) !== initialFormSnap
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMsg(null)
+    if (saving || (form.id && !upstreamDirty)) return
     setModalErr('')
+    setSaving(true)
     const config =
       form.type === 's3'
         ? {
@@ -168,26 +177,27 @@ export const UpstreamsPage: React.FC = () => {
         await api.createUpstream(payload)
       }
       setModalOpen(false)
-      setMsg({ type: 'ok', text: '上游配置已保存' })
+      toast.success('上游配置已保存')
       await load()
     } catch (err: any) {
       setModalErr(err.message || '保存失败')
+    } finally {
+      setSaving(false)
     }
   }
 
   const handleTest = async (id: string) => {
     setTestingId(id)
-    setMsg(null)
     try {
       const res = await api.testUpstream(id)
       if (res.status === 'ok') {
-        setMsg({ type: 'ok', text: '上游存储及网络代理连通性测试通过！' })
+        toast.success('上游存储及网络代理连通性测试通过！')
       } else {
-        setMsg({ type: 'err', text: `连通性测试失败: ${res.error}` })
+        toast.error(`连通性测试失败: ${res.error}`)
       }
       await load()
     } catch (err: any) {
-      setMsg({ type: 'err', text: err.message })
+      toast.error(err.message)
     } finally {
       setTestingId(null)
     }
@@ -198,7 +208,7 @@ export const UpstreamsPage: React.FC = () => {
       const res = await api.startDropboxOAuth(id)
       window.location.href = res.authorize_url
     } catch (err: any) {
-      setMsg({ type: 'err', text: err.message })
+      toast.error(err.message)
     }
   }
 
@@ -206,9 +216,10 @@ export const UpstreamsPage: React.FC = () => {
     if (!confirm(`确定删除上游 "${u.name}" 吗？`)) return
     try {
       await api.deleteUpstream(u.id)
+      toast.success(`已删除上游 "${u.name}"`)
       await load()
     } catch (err: any) {
-      setMsg({ type: 'err', text: err.message })
+      toast.error(err.message)
     }
   }
 
@@ -222,7 +233,9 @@ export const UpstreamsPage: React.FC = () => {
         <button
           onClick={() => {
             setModalErr('')
-            setForm(emptyForm())
+            const next = emptyForm()
+            setForm(next)
+            setInitialFormSnap(JSON.stringify(next))
             setModalOpen(true)
           }}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
@@ -230,19 +243,6 @@ export const UpstreamsPage: React.FC = () => {
           <Plus className="w-4 h-4" /> 添加上游存储
         </button>
       </div>
-
-      {msg && (
-        <div
-          className={`p-3 rounded-lg text-sm flex items-center gap-2 border ${
-            msg.type === 'ok'
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-              : 'bg-rose-50 text-rose-800 border-rose-200'
-          }`}
-        >
-          {msg.type === 'ok' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-          <span>{msg.text}</span>
-        </div>
-      )}
 
       {loading ? (
         <div className="text-sm text-slate-500">加载中...</div>
@@ -287,9 +287,13 @@ export const UpstreamsPage: React.FC = () => {
                           </code>
                           <button
                             type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
-                              setMsg({ type: 'ok', text: '已复制回调地址，请粘贴并保存到 Dropbox App Console -> OAuth 2 -> Redirect URIs 后再点击授权。' })
+                            onClick={async () => {
+                              try {
+                                await copyText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
+                                toast.success('已复制回调地址，请粘贴并保存到 Dropbox App Console -> OAuth 2 -> Redirect URIs 后再点击授权。')
+                              } catch (e: any) {
+                                toast.error(e.message || '复制失败')
+                              }
                             }}
                             className="text-amber-800 hover:text-amber-950 inline-flex items-center gap-0.5 font-medium"
                             title="复制回调地址"
@@ -306,9 +310,13 @@ export const UpstreamsPage: React.FC = () => {
                         </code>
                         <button
                           type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
-                            setMsg({ type: 'ok', text: '已复制 Dropbox Redirect URI。' })
+                          onClick={async () => {
+                            try {
+                              await copyText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
+                              toast.success('已复制 Dropbox Redirect URI。')
+                            } catch (e: any) {
+                              toast.error(e.message || '复制失败')
+                            }
                           }}
                           className="text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-0.5"
                           title="复制回调地址"
@@ -539,11 +547,15 @@ export const UpstreamsPage: React.FC = () => {
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t">
-                <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-lg border text-slate-600 hover:bg-slate-50">
+                <button type="button" disabled={saving} onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-lg border text-slate-600 hover:bg-slate-50 disabled:opacity-50">
                   取消
                 </button>
-                <button type="submit" className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
-                  保存配置
+                <button
+                  type="submit"
+                  disabled={saving || (Boolean(form.id) && !upstreamDirty)}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white font-medium"
+                >
+                  {saving ? '保存中...' : form.id && !upstreamDirty ? '无改动' : '保存配置'}
                 </button>
               </div>
             </form>

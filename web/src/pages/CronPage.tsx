@@ -2,24 +2,26 @@ import React, { useEffect, useState } from 'react'
 import { History, Play } from 'lucide-react'
 import { api, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
+import { useToast } from '../components/Toast'
 import type { CronJob, CronJobRun } from '../types'
 
 export const CronPage: React.FC = () => {
+  const toast = useToast()
   const [jobs, setJobs] = useState<CronJob[]>([])
   const [editing, setEditing] = useState<CronJob | null>(null)
   const [cronExpr, setCronExpr] = useState('')
   const [enabled, setEnabled] = useState(true)
   const [configText, setConfigText] = useState('{}')
+  const [saving, setSaving] = useState(false)
   const [runsJob, setRunsJob] = useState<CronJob | null>(null)
   const [runs, setRuns] = useState<CronJobRun[]>([])
-  const [msg, setMsg] = useState('')
 
   const load = async () => {
     try {
       const res = await api.listCronJobs()
       setJobs(res.items || [])
     } catch (err: any) {
-      setMsg(`加载定时任务失败: ${err.message}`)
+      toast.error(`加载定时任务失败: ${err.message}`)
     }
   }
 
@@ -34,28 +36,35 @@ export const CronPage: React.FC = () => {
     setConfigText(j.config_json || '{}')
   }
 
+  const cronDirty = editing
+    ? cronExpr !== editing.cron_expr || enabled !== editing.enabled || configText !== (editing.config_json || '{}')
+    : false
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!editing) return
+    if (!editing || !cronDirty) return
+    setSaving(true)
     try {
       const cfg = JSON.parse(configText || '{}')
       await api.updateCronJob(editing.id, { cron_expr: cronExpr, enabled, config: cfg })
       setEditing(null)
-      setMsg('定时任务已更新并热重载')
+      toast.success('定时任务已更新并热重载')
       await load()
     } catch (err: any) {
-      alert(err.message)
+      toast.error(err.message || '保存定时任务失败')
+    } finally {
+      setSaving(false)
     }
   }
 
   const handleRunNow = async (j: CronJob) => {
-    setMsg(`正在执行 ${j.name}...`)
+    toast.info(`正在执行 ${j.name}...`)
     try {
       const run = await api.runCronJob(j.id)
-      setMsg(`"${j.name}" 执行完成: ${run.status} (${run.output_log})`)
+      toast.success(`"${j.name}" 执行完成: ${run.status} (${run.output_log})`)
       await load()
     } catch (err: any) {
-      setMsg(`执行失败: ${err.message}`)
+      toast.error(`执行失败: ${err.message}`)
     }
   }
 
@@ -71,8 +80,6 @@ export const CronPage: React.FC = () => {
         <h1 className="text-xl font-bold text-slate-900">定时任务管理（Cron Scheduler）</h1>
         <p className="text-sm text-slate-500">管理日志清理、缓冲盘垃圾回收、上游连通巡检等周期任务</p>
       </div>
-
-      {msg && <div className="p-3 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg text-sm">{msg}</div>}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">
@@ -141,8 +148,14 @@ export const CronPage: React.FC = () => {
                 <textarea rows={3} value={configText} onChange={(e) => setConfigText(e.target.value)} className="w-full px-3 py-2 border rounded-lg font-mono text-xs" />
               </div>
               <div className="flex justify-end gap-2 pt-2 border-t">
-                <button type="button" onClick={() => setEditing(null)} className="px-4 py-2 border rounded-lg">取消</button>
-                <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg">保存并重载</button>
+                <button type="button" disabled={saving} onClick={() => setEditing(null)} className="px-4 py-2 border rounded-lg disabled:opacity-50">取消</button>
+                <button
+                  type="submit"
+                  disabled={saving || !cronDirty}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg"
+                >
+                  {saving ? '保存中...' : cronDirty ? '保存并重载' : '无改动'}
+                </button>
               </div>
             </form>
           </div>

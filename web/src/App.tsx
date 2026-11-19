@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Layout, type NavTab } from './components/Layout'
+import { ToastProvider } from './components/Toast'
 import { AuditPage } from './pages/AuditPage'
 import { AuthPage } from './pages/AuthPages'
 import { ClientsPage } from './pages/ClientsPage'
@@ -79,24 +80,26 @@ export function App() {
   }
 
   return (
-    <Layout
-      active={tab}
-      onNavigate={navigate}
-      admin={admin}
-      onLogout={async () => {
-        await api.logout()
-        setAdmin(null)
-      }}
-    >
-      {tab === 'dashboard' && <DashboardPage />}
-      {tab === 'tasks' && <TasksPage onNavigate={navigate} />}
-      {tab === 'upstreams' && <UpstreamsPage />}
-      {tab === 'clients' && <ClientsPage />}
-      {tab === 'cron' && <CronPage />}
-      {tab === 'audit' && <AuditPage />}
-      {tab === 'migration' && <MigrationPage />}
-      {tab === 'settings' && <SettingsPage />}
-    </Layout>
+    <ToastProvider>
+      <Layout
+        active={tab}
+        onNavigate={navigate}
+        admin={admin}
+        onLogout={async () => {
+          await api.logout()
+          setAdmin(null)
+        }}
+      >
+        {tab === 'dashboard' && <DashboardPage />}
+        {tab === 'tasks' && <TasksPage onNavigate={navigate} />}
+        {tab === 'upstreams' && <UpstreamsPage />}
+        {tab === 'clients' && <ClientsPage />}
+        {tab === 'cron' && <CronPage />}
+        {tab === 'audit' && <AuditPage />}
+        {tab === 'migration' && <MigrationPage />}
+        {tab === 'settings' && <SettingsPage />}
+      </Layout>
+    </ToastProvider>
   )
 }
 

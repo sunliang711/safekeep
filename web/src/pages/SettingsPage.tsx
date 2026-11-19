@@ -2,15 +2,41 @@ import React, { useEffect, useState } from 'react'
 import { Check, CheckCircle2, Copy, Eye, EyeOff, Loader2, Mail, SlidersHorizontal, Users, XCircle } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
+import { useToast } from '../components/Toast'
 import { copyText } from '../utils/clipboard'
-import type { Admin, SystemSettings } from '../types'
+import type { Admin, SMTPConfig, SystemSettings } from '../types'
 
 type SettingsSubTab = 'general' | 'smtp' | 'admins'
 
+function smtpSnapshot(cfg: {
+  enabled: boolean
+  host: string
+  port: number
+  tls_mode: string
+  username: string
+  from_email: string
+  from_name: string
+  to_emails: string[]
+}): string {
+  return JSON.stringify({
+    enabled: cfg.enabled,
+    host: cfg.host.trim(),
+    port: Number(cfg.port),
+    tls_mode: cfg.tls_mode,
+    username: cfg.username.trim(),
+    from_email: cfg.from_email.trim(),
+    from_name: cfg.from_name.trim(),
+    to_emails: cfg.to_emails,
+  })
+}
+
 export const SettingsPage: React.FC = () => {
+  const toast = useToast()
   const [subTab, setSubTab] = useState<SettingsSubTab>('general')
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
+  const [savedGeneralSnap, setSavedGeneralSnap] = useState('')
+  const [savingGeneral, setSavingGeneral] = useState(false)
   const [admins, setAdmins] = useState<Admin[]>([])
 
   // SMTP state
@@ -29,40 +55,58 @@ export const SettingsPage: React.FC = () => {
   const [smtpFromEmail, setSmtpFromEmail] = useState('')
   const [smtpFromName, setSmtpFromName] = useState('SafeKeep')
   const [smtpToEmails, setSmtpToEmails] = useState('')
+  const [savedSmtpSnap, setSavedSmtpSnap] = useState('')
+  const [savingSmtp, setSavingSmtp] = useState(false)
   const [smtpTesting, setSmtpTesting] = useState(false)
   const [smtpTestResult, setSmtpTestResult] = useState<{ ok: boolean; message: string; time: string } | null>(null)
 
   // Admins state
   const [newAdminUser, setNewAdminUser] = useState('')
   const [newAdminPass, setNewAdminPass] = useState('')
+  const [creatingAdmin, setCreatingAdmin] = useState(false)
   const [oldPwd, setOldPwd] = useState('')
   const [newPwd, setNewPwd] = useState('')
+  const [changingOwnPwd, setChangingOwnPwd] = useState(false)
 
-  const [msg, setMsg] = useState('')
-  const [err, setErr] = useState('')
+  const applySavedSmtp = (smtp: SMTPConfig) => {
+    setSmtpEnabled(smtp.enabled)
+    setSmtpHost(smtp.host || '')
+    setSmtpPort(smtp.port || 587)
+    setSmtpTLSMode(smtp.tls_mode || 'starttls')
+    setSmtpUsername(smtp.username || '')
+    setSmtpHasPassword(smtp.has_password)
+    setSmtpSavedPassword(smtp.password || '')
+    setSmtpPassword('')
+    setSmtpEditingPwd(false)
+    setSmtpShowPwd(false)
+    setSmtpClearPassword(false)
+    setSmtpFromEmail(smtp.from_email || '')
+    setSmtpFromName(smtp.from_name || 'SafeKeep')
+    setSmtpToEmails((smtp.to_emails || []).join(', '))
+    setSavedSmtpSnap(
+      smtpSnapshot({
+        enabled: smtp.enabled,
+        host: smtp.host || '',
+        port: smtp.port || 587,
+        tls_mode: smtp.tls_mode || 'starttls',
+        username: smtp.username || '',
+        from_email: smtp.from_email || '',
+        from_name: smtp.from_name || 'SafeKeep',
+        to_emails: smtp.to_emails || [],
+      })
+    )
+  }
 
   const load = async () => {
     setLoading(true)
     try {
       const [s, a, smtp] = await Promise.all([api.getSettings(), api.listAdmins(), api.getSMTP()])
       setSettings(s)
+      setSavedGeneralSnap(JSON.stringify(s))
       setAdmins(a.items || [])
-      setSmtpEnabled(smtp.enabled)
-      setSmtpHost(smtp.host || '')
-      setSmtpPort(smtp.port || 587)
-      setSmtpTLSMode(smtp.tls_mode || 'starttls')
-      setSmtpUsername(smtp.username || '')
-      setSmtpHasPassword(smtp.has_password)
-      setSmtpSavedPassword(smtp.password || '')
-      setSmtpPassword('')
-      setSmtpEditingPwd(false)
-      setSmtpShowPwd(false)
-      setSmtpClearPassword(false)
-      setSmtpFromEmail(smtp.from_email || '')
-      setSmtpFromName(smtp.from_name || 'SafeKeep')
-      setSmtpToEmails((smtp.to_emails || []).join(', '))
+      applySavedSmtp(smtp)
     } catch (e: any) {
-      setErr(e.message || '加载设置失败')
+      toast.error(e.message || '加载设置失败')
     } finally {
       setLoading(false)
     }
@@ -74,23 +118,29 @@ export const SettingsPage: React.FC = () => {
 
   const switchTab = (next: SettingsSubTab) => {
     setSubTab(next)
-    setMsg('')
-    setErr('')
   }
 
   const saveSettings = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!settings) return
-    setMsg('')
-    setErr('')
+    setSavingGeneral(true)
     try {
       const updated = await api.updateSettings(settings)
       setSettings(updated)
-      setMsg('全局运行设置已保存')
+      setSavedGeneralSnap(JSON.stringify(updated))
+      toast.success('全局运行设置已保存')
     } catch (e: any) {
-      setErr(e.message)
+      toast.error(e.message || '保存全局设置失败')
+    } finally {
+      setSavingGeneral(false)
     }
   }
+
+  const parseToEmails = (raw: string) =>
+    raw
+      .split(/[,;\n，；]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
 
   const smtpPayload = () => ({
     enabled: smtpEnabled,
@@ -101,27 +151,35 @@ export const SettingsPage: React.FC = () => {
     ...(smtpClearPassword ? { clear_password: true } : smtpEditingPwd && smtpPassword !== '' ? { password: smtpPassword } : {}),
     from_email: smtpFromEmail.trim(),
     from_name: smtpFromName.trim(),
-    to_emails: smtpToEmails
-      .split(/[,;\n，；]+/)
-      .map((s) => s.trim())
-      .filter(Boolean),
+    to_emails: parseToEmails(smtpToEmails),
   })
+
+  const currentSmtpSnap = smtpSnapshot({
+    enabled: smtpEnabled,
+    host: smtpHost,
+    port: smtpPort,
+    tls_mode: smtpTLSMode,
+    username: smtpUsername,
+    from_email: smtpFromEmail,
+    from_name: smtpFromName,
+    to_emails: parseToEmails(smtpToEmails),
+  })
+  const generalDirty = settings ? JSON.stringify(settings) !== savedGeneralSnap : false
+  const smtpDirty =
+    savedSmtpSnap !== '' &&
+    (currentSmtpSnap !== savedSmtpSnap || smtpClearPassword || (smtpEditingPwd && smtpPassword !== ''))
 
   const saveSMTP = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMsg('')
-    setErr('')
+    setSavingSmtp(true)
     try {
       const updated = await api.updateSMTP(smtpPayload())
-      setSmtpHasPassword(updated.has_password)
-      setSmtpSavedPassword(updated.password || '')
-      setSmtpPassword('')
-      setSmtpEditingPwd(false)
-      setSmtpShowPwd(false)
-      setSmtpClearPassword(false)
-      setMsg('SMTP 邮件告警配置已保存')
+      applySavedSmtp(updated)
+      toast.success('SMTP 邮件告警配置已保存')
     } catch (e: any) {
-      setErr(e.message)
+      toast.error(e.message || '保存 SMTP 配置失败')
+    } finally {
+      setSavingSmtp(false)
     }
   }
 
@@ -131,9 +189,10 @@ export const SettingsPage: React.FC = () => {
     try {
       await copyText(valueToCopy)
       setSmtpPwdCopied(true)
+      toast.success('已复制 SMTP 授权码')
       setTimeout(() => setSmtpPwdCopied(false), 1500)
     } catch (e: any) {
-      setErr(e.message || '复制失败，请点击眼睛图标显示后手动复制')
+      toast.error(e.message || '复制失败，请点击眼睛图标显示后手动复制')
     }
   }
 
@@ -145,8 +204,6 @@ export const SettingsPage: React.FC = () => {
   }
 
   const testSMTP = async () => {
-    setMsg('')
-    setErr('')
     setSmtpTestResult(null)
     setSmtpTesting(true)
     const nowText = new Date().toLocaleTimeString()
@@ -156,11 +213,11 @@ export const SettingsPage: React.FC = () => {
       const serverText = res.host ? `${res.host}:${res.port || smtpPort}` : `${smtpHost}:${smtpPort}`
       const successMsg = `测试邮件发送成功！已发送至 ${targetText}（${serverText}）`
       setSmtpTestResult({ ok: true, message: successMsg, time: nowText })
-      setMsg(successMsg)
+      toast.success(successMsg)
     } catch (e: any) {
       const failMsg = `测试邮件发送失败：${e.message || '未知错误'}`
       setSmtpTestResult({ ok: false, message: failMsg, time: nowText })
-      setErr(failMsg)
+      toast.error(failMsg)
     } finally {
       setSmtpTesting(false)
     }
@@ -168,30 +225,32 @@ export const SettingsPage: React.FC = () => {
 
   const handleCreateAdmin = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMsg('')
-    setErr('')
+    setCreatingAdmin(true)
     try {
       await api.createAdmin(newAdminUser, newAdminPass)
       setNewAdminUser('')
       setNewAdminPass('')
-      setMsg('新管理员已创建')
+      toast.success('新管理员已创建')
       await load()
     } catch (e: any) {
-      setErr(e.message)
+      toast.error(e.message || '创建管理员失败')
+    } finally {
+      setCreatingAdmin(false)
     }
   }
 
   const handleChangeOwnPassword = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMsg('')
-    setErr('')
+    setChangingOwnPwd(true)
     try {
       await api.changePassword(oldPwd, newPwd)
       setOldPwd('')
       setNewPwd('')
-      setMsg('当前管理员密码已修改')
+      toast.success('当前管理员密码已修改')
     } catch (e: any) {
-      setErr(e.message)
+      toast.error(e.message || '修改密码失败')
+    } finally {
+      setChangingOwnPwd(false)
     }
   }
 
@@ -224,9 +283,6 @@ export const SettingsPage: React.FC = () => {
         <h1 className="text-xl font-bold text-slate-900">系统设置</h1>
         <p className="text-sm text-slate-500">管理全局运行参数、SMTP 邮件告警服务与管理员账号</p>
       </div>
-
-      {msg && <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-sm">{msg}</div>}
-      {err && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-sm">{err}</div>}
 
       <div className="flex flex-col md:flex-row gap-6 items-start">
         {/* Left Vertical Tab Navigation */}
@@ -359,8 +415,12 @@ export const SettingsPage: React.FC = () => {
                       />
                     </div>
                     <div className="md:col-span-2 flex justify-end pt-2 border-t">
-                      <button type="submit" className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium">
-                        保存全局设置
+                      <button
+                        type="submit"
+                        disabled={savingGeneral || !generalDirty}
+                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-opacity"
+                      >
+                        {savingGeneral ? '保存中...' : generalDirty ? '保存全局设置' : '已保存'}
                       </button>
                     </div>
                   </form>
@@ -596,13 +656,17 @@ export const SettingsPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={testSMTP}
-                        disabled={smtpTesting}
+                        disabled={smtpTesting || savingSmtp}
                         className="px-4 py-2 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 rounded-lg text-sm"
                       >
                         {smtpTesting ? '发送中...' : '发送测试邮件'}
                       </button>
-                      <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium">
-                        保存 SMTP 配置
+                      <button
+                        type="submit"
+                        disabled={savingSmtp || !smtpDirty}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-opacity"
+                      >
+                        {savingSmtp ? '保存中...' : smtpDirty ? '保存 SMTP 配置' : '已保存'}
                       </button>
                     </div>
                   </form>
@@ -631,9 +695,9 @@ export const SettingsPage: React.FC = () => {
                                 if (!pwd) return
                                 try {
                                   await api.updateAdmin(a.id, { password: pwd })
-                                  setMsg(`已重置管理员 "${a.username}" 密码`)
+                                  toast.success(`已重置管理员 "${a.username}" 密码`)
                                 } catch (e: any) {
-                                  setErr(e.message)
+                                  toast.error(e.message || '重置密码失败')
                                 }
                               }}
                               className="text-xs text-slate-600 hover:underline"
@@ -644,9 +708,10 @@ export const SettingsPage: React.FC = () => {
                               onClick={async () => {
                                 try {
                                   await api.updateAdmin(a.id, { is_active: !a.is_active })
+                                  toast.success(`已${a.is_active ? '禁用' : '启用'}管理员 "${a.username}"`)
                                   await load()
                                 } catch (e: any) {
-                                  setErr(e.message)
+                                  toast.error(e.message || '更新管理员状态失败')
                                 }
                               }}
                               className="text-xs text-indigo-600 hover:underline"
@@ -677,8 +742,12 @@ export const SettingsPage: React.FC = () => {
                           onChange={(e) => setNewAdminPass(e.target.value)}
                           className="w-full px-3 py-1.5 border rounded-lg"
                         />
-                        <button type="submit" className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium">
-                          添加管理员
+                        <button
+                          type="submit"
+                          disabled={creatingAdmin || newAdminUser.trim().length < 3 || newAdminPass.length < 8}
+                          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium"
+                        >
+                          {creatingAdmin ? '添加中...' : '添加管理员'}
                         </button>
                       </form>
                       <form onSubmit={handleChangeOwnPassword} className="space-y-2.5 text-sm border rounded-xl p-4">
@@ -700,8 +769,12 @@ export const SettingsPage: React.FC = () => {
                           onChange={(e) => setNewPwd(e.target.value)}
                           className="w-full px-3 py-1.5 border rounded-lg"
                         />
-                        <button type="submit" className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-medium">
-                          更新密码
+                        <button
+                          type="submit"
+                          disabled={changingOwnPwd || !oldPwd || newPwd.length < 8}
+                          className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium"
+                        >
+                          {changingOwnPwd ? '更新中...' : '更新密码'}
                         </button>
                       </form>
                     </div>

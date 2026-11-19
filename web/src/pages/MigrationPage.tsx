@@ -1,11 +1,11 @@
 import React, { useState } from 'react'
 import { Download, ShieldAlert, Upload } from 'lucide-react'
 import { api, formatTime } from '../api'
+import { useToast } from '../components/Toast'
 import type { InspectSummary } from '../types'
 
 export const MigrationPage: React.FC = () => {
-  const [msg, setMsg] = useState('')
-  const [err, setErr] = useState('')
+  const toast = useToast()
 
   // Migration Export
   const [expPass, setExpPass] = useState('')
@@ -28,8 +28,6 @@ export const MigrationPage: React.FC = () => {
 
   const handleExport = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMsg('')
-    setErr('')
     setExporting(true)
     try {
       await api.exportMigration({
@@ -38,9 +36,9 @@ export const MigrationPage: React.FC = () => {
         include_audit_logs: expAudit,
         passphrase: expPass,
       })
-      setMsg('加密迁移包已生成并开始下载')
+      toast.success('加密迁移包已生成并开始下载')
     } catch (e: any) {
-      setErr(e.message)
+      toast.error(e.message || '导出迁移包失败')
     } finally {
       setExporting(false)
     }
@@ -48,8 +46,6 @@ export const MigrationPage: React.FC = () => {
 
   const handleInspect = async () => {
     if (!impFile || !impPass) return
-    setMsg('')
-    setErr('')
     setInspecting(true)
     const fd = new FormData()
     fd.append('bundle', impFile)
@@ -57,9 +53,10 @@ export const MigrationPage: React.FC = () => {
     try {
       const summary = await api.inspectMigration(fd)
       setInspectRes(summary)
+      toast.info('迁移包预检完成')
     } catch (e: any) {
       setInspectRes(null)
-      setErr(e.message)
+      toast.error(e.message || '预检迁移包失败')
     } finally {
       setInspecting(false)
     }
@@ -70,8 +67,6 @@ export const MigrationPage: React.FC = () => {
     if (impMode === 'replace' && !confirm('确定使用「覆盖恢复」模式？当前环境的上游与客户配置将被清空替换为迁移包快照！')) {
       return
     }
-    setMsg('')
-    setErr('')
     setImporting(true)
     const fd = new FormData()
     fd.append('bundle', impFile)
@@ -83,12 +78,12 @@ export const MigrationPage: React.FC = () => {
     fd.append('include_audit_logs', String(impAudit))
     try {
       const res = await api.importMigration(fd)
-      setMsg(
+      toast.success(
         `环境恢复成功！已导入上游 ${res.counts.upstreams} 个、客户 ${res.counts.clients} 个、定时任务 ${res.counts.cron_jobs} 个、历史任务 ${res.counts.backup_tasks} 条。`
       )
       setInspectRes(null)
     } catch (e: any) {
-      setErr(e.message)
+      toast.error(e.message || '环境恢复失败')
     } finally {
       setImporting(false)
     }
@@ -102,9 +97,6 @@ export const MigrationPage: React.FC = () => {
           导出加密迁移包（.skbundle）快速迁移到新服务器或灾备节点，支持预检冲突与事务化恢复
         </p>
       </div>
-
-      {msg && <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-sm">{msg}</div>}
-      {err && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-sm">{err}</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">

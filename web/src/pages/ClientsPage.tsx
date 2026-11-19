@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
+import { useToast } from '../components/Toast'
+import { copyText } from '../utils/clipboard'
 import type { Client, Upstream } from '../types'
 
 interface ClientForm {
@@ -21,26 +23,27 @@ interface ClientForm {
 }
 
 export const ClientsPage: React.FC = () => {
+  const toast = useToast()
   const [clients, setClients] = useState<Client[]>([])
   const [upstreams, setUpstreams] = useState<Upstream[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<ClientForm | null>(null)
+  const [initialFormSnap, setInitialFormSnap] = useState('')
+  const [saving, setSaving] = useState(false)
   const [revealedKey, setRevealedKey] = useState<string | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [error, setError] = useState('')
-  const [pageErr, setPageErr] = useState('')
 
   const load = async () => {
     setLoading(true)
-    setPageErr('')
     try {
       const [cRes, uRes] = await Promise.all([api.listClients(), api.listUpstreams()])
       setClients(cRes.items || [])
       setUpstreams(uRes.items || [])
     } catch (err: any) {
-      setPageErr(err.message || '加载客户列表失败')
+      toast.error(err.message || '加载客户列表失败')
     } finally {
       setLoading(false)
     }
@@ -77,7 +80,7 @@ export const ClientsPage: React.FC = () => {
   const openEdit = (c: Client) => {
     setError('')
     const boundMap = new Map(c.upstreams.map((u) => [u.upstream_id, u]))
-    setForm({
+    const nextForm: ClientForm = {
       id: c.id,
       name: c.name,
       description: c.description,
@@ -99,14 +102,19 @@ export const ClientsPage: React.FC = () => {
           priority: b ? b.priority : (idx + 1) * 10,
         }
       }),
-    })
+    }
+    setForm(nextForm)
+    setInitialFormSnap(JSON.stringify(nextForm))
     setModalOpen(true)
   }
 
+  const clientDirty = form ? !form.id || JSON.stringify(form) !== initialFormSnap : false
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form) return
+    if (!form || saving || (form.id && !clientDirty)) return
     setError('')
+    setSaving(true)
     const selectedUpstreams = form.upstreams
       .filter((u) => u.enabled)
       .map((u) => ({ upstream_id: u.upstream_id, is_default: u.is_default, priority: Number(u.priority) }))
@@ -136,14 +144,18 @@ export const ClientsPage: React.FC = () => {
     try {
       if (form.id) {
         await api.updateClient(form.id, payload)
+        toast.success(`客户 "${form.name}" 配置已保存`)
       } else {
         const res = await api.createClient(payload)
         setRevealedKey(res.api_key)
+        toast.success(`客户 "${form.name}" 已创建`)
       }
       setModalOpen(false)
       await load()
     } catch (err: any) {
       setError(err.message)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -152,16 +164,22 @@ export const ClientsPage: React.FC = () => {
     try {
       const res = await api.rotateClientKey(c.id)
       setRevealedKey(res.api_key)
+      toast.success(`已为 "${c.name}" 生成新 API Key`)
       await load()
     } catch (err: any) {
-      alert(err.message)
+      toast.error(err.message)
     }
   }
 
   const handleDelete = async (c: Client) => {
     if (!confirm(`确定删除客户 "${c.name}"？关联的备份任务记录也会被清除。`)) return
-    await api.deleteClient(c.id)
-    await load()
+    try {
+      await api.deleteClient(c.id)
+      toast.success(`已删除客户 "${c.name}"`)
+      await load()
+    } catch (err: any) {
+      toast.error(err.message)
+    }
   }
 
   return (
@@ -179,15 +197,17 @@ export const ClientsPage: React.FC = () => {
         </button>
       </div>
 
-      {pageErr && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-sm">{pageErr}</div>}
-
       {(() => {
         const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8333'
         const sampleKey = 'sk_your_api_key'
-        const copyCmd = (id: string, cmd: string) => {
-          navigator.clipboard?.writeText(cmd)
-          setCopiedId(id)
-          setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1500)
+        const copyCmd = async (id: string, cmd: string) => {
+          try {
+            await copyText(cmd)
+            setCopiedId(id)
+            setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1500)
+          } catch (e: any) {
+            toast.error(e.message || '复制失败')
+          }
         }
         const examples = [
           {
@@ -472,11 +492,15 @@ export const ClientsPage: React.FC = () => {
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t">
-                <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-lg border text-slate-600">
+                <button type="button" disabled={saving} onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-lg border text-slate-600 disabled:opacity-50">
                   取消
                 </button>
-                <button type="submit" className="px-4 py-2 rounded-lg bg-indigo-600 text-white font-medium">
-                  保存
+                <button
+                  type="submit"
+                  disabled={saving || (Boolean(form.id) && !clientDirty)}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white font-medium"
+                >
+                  {saving ? '保存中...' : form.id && !clientDirty ? '无改动' : '保存'}
                 </button>
               </div>
             </form>
@@ -495,7 +519,14 @@ export const ClientsPage: React.FC = () => {
             <div className="flex items-center gap-2 bg-slate-900 text-emerald-400 p-3 rounded-lg font-mono text-xs break-all">
               <span className="flex-1">{revealedKey}</span>
               <button
-                onClick={() => navigator.clipboard.writeText(revealedKey)}
+                onClick={async () => {
+                  try {
+                    await copyText(revealedKey)
+                    toast.success('已复制 API Key')
+                  } catch (e: any) {
+                    toast.error(e.message || '复制失败')
+                  }
+                }}
                 className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded text-white"
                 title="复制"
               >
