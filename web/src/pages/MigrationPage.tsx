@@ -63,7 +63,7 @@ export const MigrationPage: React.FC = () => {
   }
 
   const handleImport = async () => {
-    if (!impFile || !impPass) return
+    if (!impFile || !impPass || !inspectRes || importing) return
     if (impMode === 'replace' && !confirm('确定使用「覆盖恢复」模式？当前环境的上游与客户配置将被清空替换为迁移包快照！')) {
       return
     }
@@ -98,6 +98,7 @@ export const MigrationPage: React.FC = () => {
         </p>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-4 text-xs text-indigo-800"><span className="font-semibold">迁移流程</span><span>01 生成加密迁移包</span><span aria-hidden="true">→</span><span>02 上传并预检</span><span aria-hidden="true">→</span><span>03 确认后恢复</span></div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
           <div className="flex items-center gap-2 font-semibold text-slate-900">
@@ -124,8 +125,8 @@ export const MigrationPage: React.FC = () => {
               </label>
             </div>
             <div>
-              <label className="block text-xs text-slate-600 mb-1">设置迁移加密口令（至少 6 位，导入时需验证）*</label>
-              <input
+              <label htmlFor="migration-field-1" className="block text-xs text-slate-600 mb-1">设置迁移加密口令（至少 6 位，导入时需验证）*</label>
+              <input id="migration-field-1"
                 type="password"
                 required
                 minLength={6}
@@ -151,13 +152,16 @@ export const MigrationPage: React.FC = () => {
             <span>导入恢复环境</span>
           </div>
           <p className="text-xs text-slate-500">
-            上传 `.skbundle` 并输入迁移口令。先点击「预检包内容」查看清单与冲突，确认后执行事务导入并自动使用本机主密钥重新加密。
+            上传 .skbundle 并输入迁移口令。先点击「预检包内容」查看清单与冲突，确认后执行事务导入并自动使用本机主密钥重新加密。
           </p>
           <div className="space-y-3 text-sm">
             <div>
-              <label className="block text-xs text-slate-600 mb-1">选择迁移包文件（.skbundle）</label>
-              <input
+              <label htmlFor="migration-field-2" className="block text-xs text-slate-600 mb-1">选择迁移包文件（.skbundle）</label>
+              <input id="migration-field-2"
                 type="file"
+                accept=".skbundle"
+                aria-label="选择迁移包文件"
+                disabled={inspecting || importing}
                 onChange={(e) => {
                   setImpFile(e.target.files?.[0] || null)
                   setInspectRes(null)
@@ -166,21 +170,21 @@ export const MigrationPage: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-600 mb-1">迁移包解密口令</label>
-              <input type="password" value={impPass} onChange={(e) => setImpPass(e.target.value)} className="w-full px-3 py-2 border rounded-lg" />
+              <label htmlFor="migration-field-3" className="block text-xs text-slate-600 mb-1">迁移包解密口令</label>
+              <input id="migration-field-3" aria-label="迁移包解密口令" autoComplete="off" disabled={inspecting || importing} type="password" value={impPass} onChange={(e) => { setImpPass(e.target.value); setInspectRes(null) }} className="w-full px-3 py-2 border rounded-lg" />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
-                <label className="block text-slate-600 mb-1">恢复模式</label>
-                <select value={impMode} onChange={(e) => setImpMode(e.target.value as any)} className="w-full px-2.5 py-1.5 border rounded-lg bg-white">
-                  <option value="merge">增量合并（merge）</option>
-                  <option value="replace">清空覆盖恢复（replace）</option>
+                <label htmlFor="migration-field-4" className="block text-slate-600 mb-1">恢复模式</label>
+                <select id="migration-field-4" value={impMode} onChange={(e) => setImpMode(e.target.value as any)} className="w-full px-2.5 py-1.5 border rounded-lg bg-white">
+                  <option value="merge">增量合并</option>
+                  <option value="replace">清空覆盖恢复</option>
                 </select>
               </div>
               {impMode === 'merge' && (
                 <div>
-                  <label className="block text-slate-600 mb-1">冲突处理策略</label>
-                  <select value={impConflict} onChange={(e) => setImpConflict(e.target.value as any)} className="w-full px-2.5 py-1.5 border rounded-lg bg-white">
+                  <label htmlFor="migration-field-5" className="block text-slate-600 mb-1">冲突处理策略</label>
+                  <select id="migration-field-5" value={impConflict} onChange={(e) => setImpConflict(e.target.value as any)} className="w-full px-2.5 py-1.5 border rounded-lg bg-white">
                     <option value="skip">跳过已存在项</option>
                     <option value="overwrite">覆盖同名/同 ID 项</option>
                   </select>
@@ -201,7 +205,8 @@ export const MigrationPage: React.FC = () => {
                 导入审计日志
               </label>
             </div>
-            <div className="flex gap-2">
+            <p className="text-xs text-slate-500">{inspectRes ? '预检完成，请核对下方清单与冲突后执行恢复。' : '先预检包内容，确认成功后即可执行环境恢复。'}</p>
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleInspect}
@@ -213,7 +218,7 @@ export const MigrationPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleImport}
-                disabled={!impFile || !impPass || inspecting || importing}
+                disabled={!impFile || !impPass || !inspectRes || inspecting || importing}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:opacity-50"
               >
                 {importing ? '导入中...' : '执行环境恢复'}

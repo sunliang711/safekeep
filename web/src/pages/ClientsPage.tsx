@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
+import { EmptyState, LoadingState } from '../components/Feedback'
+import { Modal } from '../components/Modal'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
@@ -55,7 +57,7 @@ export const ClientsPage: React.FC = () => {
 
   const openNew = () => {
     setError('')
-    setForm({
+    const nextForm: ClientForm = {
       name: '',
       description: '',
       enabled: true,
@@ -73,7 +75,9 @@ export const ClientsPage: React.FC = () => {
         is_default: true,
         priority: (idx + 1) * 10,
       })),
-    })
+    }
+    setForm(nextForm)
+    setInitialFormSnap(JSON.stringify(nextForm))
     setModalOpen(true)
   }
 
@@ -106,6 +110,11 @@ export const ClientsPage: React.FC = () => {
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
     setModalOpen(true)
+  }
+
+  const closeModal = () => {
+    if (JSON.stringify(form) !== initialFormSnap && !confirm('客户配置尚未保存，确定放弃修改吗？')) return
+    setModalOpen(false)
   }
 
   const clientDirty = form ? !form.id || JSON.stringify(form) !== initialFormSnap : false
@@ -302,10 +311,10 @@ export const ClientsPage: React.FC = () => {
       })()}
 
       {loading ? (
-        <div className="text-sm text-slate-500">加载中...</div>
+        <LoadingState label="正在读取客户策略…" />
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="clients-table w-full text-sm">
             <thead className="bg-slate-50 text-xs text-slate-500 border-b">
               <tr>
                 <th className="text-left px-4 py-3">客户名称</th>
@@ -360,7 +369,7 @@ export const ClientsPage: React.FC = () => {
                     <button onClick={() => handleRotate(c)} className="text-xs text-amber-600 hover:underline inline-flex items-center gap-0.5">
                       <RefreshCw className="w-3 h-3" /> 轮换 Key
                     </button>
-                    <button onClick={() => handleDelete(c)} className="text-xs text-rose-600 hover:underline inline-flex items-center">
+                    <button aria-label={`删除客户 ${c.name}`} onClick={() => handleDelete(c)} className="text-xs text-rose-600 hover:underline inline-flex items-center">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
@@ -368,8 +377,8 @@ export const ClientsPage: React.FC = () => {
               ))}
               {clients.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
-                    暂无客户，点击右上角创建第一个 API Key。
+                  <td colSpan={7} className="text-center">
+                    <EmptyState title="为你的应用创建访问凭证" description="为不同客户设置独立的备份策略、存储范围和 API Key。" action={<button className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />创建客户与 API Key</button>} />
                   </td>
                 </tr>
               )}
@@ -379,54 +388,54 @@ export const ClientsPage: React.FC = () => {
       )}
 
       {modalOpen && form && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <Modal title={form.id ? '编辑客户配置' : '创建客户与 API Key'} onClose={closeModal} busy={saving}>
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
             <h2 className="text-lg font-bold text-slate-900 mb-4">{form.id ? '编辑客户配置' : '创建客户与 API Key'}</h2>
             {error && <div className="mb-3 p-2.5 bg-rose-50 text-rose-700 text-xs rounded-lg">{error}</div>}
             <form onSubmit={handleSave} className="space-y-4 text-sm">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">客户名称 *</label>
-                  <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-1" className="block text-xs text-slate-600 mb-1">客户名称 *</label>
+                  <input id="clients-field-1" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">默认传输模式</label>
-                  <select value={form.default_mode} onChange={(e) => setForm({ ...form, default_mode: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white">
+                  <label htmlFor="clients-field-2" className="block text-xs text-slate-600 mb-1">默认传输模式</label>
+                  <select id="clients-field-2" value={form.default_mode} onChange={(e) => setForm({ ...form, default_mode: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white">
                     <option value="async">async（异步队列，推荐）</option>
                     <option value="sync">sync（同步等待，超时转后台）</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">租户隔离路径前缀</label>
-                  <input value={form.path_prefix} onChange={(e) => setForm({ ...form, path_prefix: e.target.value })} placeholder="tenant-acme" className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-3" className="block text-xs text-slate-600 mb-1">租户隔离路径前缀</label>
+                  <input id="clients-field-3" value={form.path_prefix} onChange={(e) => setForm({ ...form, path_prefix: e.target.value })} placeholder="tenant-acme" className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">备注说明</label>
-                  <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-4" className="block text-xs text-slate-600 mb-1">备注说明</label>
+                  <input id="clients-field-4" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">单文件大小上限 MB（0=跟随全局）</label>
-                  <input type="number" min={0} value={form.max_file_size_mb} onChange={(e) => setForm({ ...form, max_file_size_mb: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-5" className="block text-xs text-slate-600 mb-1">单文件大小上限 MB（0=跟随全局）</label>
+                  <input id="clients-field-5" type="number" min={0} value={form.max_file_size_mb} onChange={(e) => setForm({ ...form, max_file_size_mb: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">每分钟限流 RPM（0=不限）</label>
-                  <input type="number" min={0} value={form.rate_limit_rpm} onChange={(e) => setForm({ ...form, rate_limit_rpm: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-6" className="block text-xs text-slate-600 mb-1">每分钟限流 RPM（0=不限）</label>
+                  <input id="clients-field-6" type="number" min={0} value={form.rate_limit_rpm} onChange={(e) => setForm({ ...form, rate_limit_rpm: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">异步回调 Webhook URL</label>
-                  <input value={form.webhook_url} onChange={(e) => setForm({ ...form, webhook_url: e.target.value })} placeholder="https://example.com/hook" className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-7" className="block text-xs text-slate-600 mb-1">异步回调 Webhook URL</label>
+                  <input id="clients-field-7" value={form.webhook_url} onChange={(e) => setForm({ ...form, webhook_url: e.target.value })} placeholder="https://example.com/hook" className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">Webhook 签名密钥 {form.id ? '（留空不变）' : ''}</label>
-                  <input type="password" value={form.webhook_secret} onChange={(e) => setForm({ ...form, webhook_secret: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-8" className="block text-xs text-slate-600 mb-1">Webhook 签名密钥 {form.id ? '（留空不变）' : ''}</label>
+                  <input id="clients-field-8" type="password" value={form.webhook_secret} onChange={(e) => setForm({ ...form, webhook_secret: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">允许的 MIME 类型（逗号分隔，空=不限）</label>
-                  <input value={form.allowed_mime_types} onChange={(e) => setForm({ ...form, allowed_mime_types: e.target.value })} placeholder="image/*,application/pdf" className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
+                  <label htmlFor="clients-field-9" className="block text-xs text-slate-600 mb-1">允许的 MIME 类型（逗号分隔，空=不限）</label>
+                  <input id="clients-field-9" value={form.allowed_mime_types} onChange={(e) => setForm({ ...form, allowed_mime_types: e.target.value })} placeholder="image/*,application/pdf" className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">API Key 过期时间（可选）</label>
-                  <input type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-10" className="block text-xs text-slate-600 mb-1">API Key 过期时间（可选）</label>
+                  <input id="clients-field-10" type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
               </div>
 
@@ -438,6 +447,7 @@ export const ClientsPage: React.FC = () => {
               <div className="border-t pt-3">
                 <div className="font-semibold text-slate-800 mb-2">绑定上游存储策略（允许范围 & 默认扇出组）</div>
                 <div className="space-y-2">
+                  {form.upstreams.length === 0 && <div className="p-3 rounded-xl bg-amber-50 text-amber-800 text-xs leading-6">尚未添加上游存储。可先保存客户，再前往「上游存储与代理」添加存储并绑定，之后即可上传备份。</div>}
                   {form.upstreams.map((uCfg, idx) => {
                     const meta = upstreams.find((x) => x.id === uCfg.upstream_id)
                     if (!meta) return null
@@ -492,7 +502,7 @@ export const ClientsPage: React.FC = () => {
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t">
-                <button type="button" disabled={saving} onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-lg border text-slate-600 disabled:opacity-50">
+                <button type="button" disabled={saving} onClick={closeModal} className="px-4 py-2 rounded-lg border text-slate-600 disabled:opacity-50">
                   取消
                 </button>
                 <button
@@ -505,11 +515,11 @@ export const ClientsPage: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
+        </Modal>
       )}
 
       {revealedKey && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <Modal title="保存 API Key" onClose={() => setRevealedKey(null)} dismissible={false}>
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4">
             <div className="flex items-center gap-2 text-amber-700 font-semibold">
               <KeyRound className="w-5 h-5" />
@@ -517,7 +527,7 @@ export const ClientsPage: React.FC = () => {
             </div>
             <p className="text-xs text-slate-500">出于安全原因，服务端仅保存其 SHA-256 哈希，关闭窗口后将无法再次查看完整明文。</p>
             <div className="flex items-center gap-2 bg-slate-900 text-emerald-400 p-3 rounded-lg font-mono text-xs break-all">
-              <span className="flex-1">{revealedKey}</span>
+              <span className="flex-1 min-w-0 select-all">{revealedKey}</span>
               <button
                 onClick={async () => {
                   try {
@@ -539,7 +549,7 @@ export const ClientsPage: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )

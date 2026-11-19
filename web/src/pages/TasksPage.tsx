@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react'
-import { CheckCircle2, Download, RotateCcw, Search, Upload, X, XCircle } from 'lucide-react'
+import React, { useEffect, useRef, useState } from 'react'
+import { CheckCircle2, Download, RotateCcw, Search, Upload, XCircle } from 'lucide-react'
+import { EmptyState } from '../components/Feedback'
+import { Modal } from '../components/Modal'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import type { NavTab } from '../components/Layout'
@@ -11,6 +13,8 @@ interface TasksPageProps {
 
 export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
   const [tasks, setTasks] = useState<BackupTask[]>([])
+  const [loading, setLoading] = useState(true)
+  const requestId = useRef(0)
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
   const limit = 20
@@ -18,6 +22,8 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
   const [mode, setMode] = useState('')
   const [q, setQ] = useState('')
   const [pageErr, setPageErr] = useState('')
+  const [uploadMetaLoading, setUploadMetaLoading] = useState(false)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
   const [selected, setSelected] = useState<BackupTask | null>(null)
 
   // Web Upload modal state (mirrors client API behavior)
@@ -37,18 +43,23 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
   const [uploadErr, setUploadErr] = useState('')
   const [uploadResult, setUploadResult] = useState<{ task: BackupTask; timedOut?: boolean } | null>(null)
 
-  const load = async (targetOffset = offset) => {
+  const load = async (targetOffset = offset, filters = { status, mode, q }) => {
+    const currentRequest = ++requestId.current
+    setLoading(true)
     setPageErr('')
     try {
       const params: Record<string, string> = { limit: String(limit), offset: String(targetOffset) }
-      if (status) params.status = status
-      if (mode) params.mode = mode
-      if (q) params.q = q
+      if (filters.status) params.status = filters.status
+      if (filters.mode) params.mode = filters.mode
+      if (filters.q) params.q = filters.q
       const res = await api.listTasks(params)
+      if (currentRequest !== requestId.current) return
       setTasks(res.items || [])
       setTotal(res.total || 0)
     } catch (err: any) {
-      setPageErr(err.message || '加载任务失败')
+      if (currentRequest === requestId.current) setPageErr(err.message || '加载任务失败')
+    } finally {
+      if (currentRequest === requestId.current) setLoading(false)
     }
   }
 
@@ -79,11 +90,14 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
     setUploadErr('')
     setUploadResult(null)
     setUpFile(null)
+    setUploadMetaLoading(true)
     setUploadOpen(true)
     try {
       await loadUploadMeta()
     } catch (err: any) {
       setUploadErr(err.message || '加载客户或上游列表失败')
+    } finally {
+      setUploadMetaLoading(false)
     }
   }
 
@@ -153,9 +167,17 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
   }, [uploadOpen, uploadResult?.task.id, uploadResult?.task.status])
 
   const handleRetry = async (id: string) => {
-    const updated = await api.retryTask(id)
-    setSelected(updated)
-    await load()
+    if (retryingId) return
+    setRetryingId(id)
+    try {
+      const updated = await api.retryTask(id)
+      setSelected(updated)
+      await load()
+    } catch (err: any) {
+      setPageErr(err.message || '重试任务失败')
+    } finally {
+      setRetryingId(null)
+    }
   }
 
   const handleUpload = async (e: React.FormEvent) => {
@@ -188,6 +210,14 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
     }
   }
 
+  const resetFilters = () => {
+    setQ('')
+    setStatus('')
+    setMode('')
+    setOffset(0)
+    load(0, { status: '', mode: '', q: '' })
+  }
+
   const activeClient = clients.find((c) => c.id === upClientId)
 
   return (
@@ -205,7 +235,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-3 bg-white p-3 rounded-xl border border-slate-200">
+      <div className="filter-bar flex flex-wrap gap-3 bg-white p-4 rounded-xl border border-slate-200">
         <div className="flex items-center gap-2 flex-1 min-w-[200px] border rounded-lg px-3 py-1.5">
           <Search className="w-4 h-4 text-slate-400" />
           <input
@@ -217,38 +247,41 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                 load(0)
               }
             }}
+            aria-label="搜索备份任务"
             placeholder="搜索文件名 / Task ID / SHA-256..."
             className="w-full text-sm focus:outline-none"
           />
         </div>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white">
+        <select aria-label="任务状态" value={status} onChange={(e) => setStatus(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white">
           <option value="">全部状态</option>
-          <option value="succeeded">succeeded</option>
-          <option value="pending">pending</option>
-          <option value="running">running</option>
-          <option value="partial_success">partial_success</option>
-          <option value="failed">failed</option>
+          <option value="succeeded">已完成</option>
+          <option value="pending">待处理</option>
+          <option value="running">进行中</option>
+          <option value="partial_success">部分成功</option>
+          <option value="failed">失败</option>
         </select>
-        <select value={mode} onChange={(e) => setMode(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white">
+        <select aria-label="传输模式" value={mode} onChange={(e) => setMode(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white">
           <option value="">全部模式</option>
-          <option value="sync">sync</option>
-          <option value="async">async</option>
+          <option value="sync">同步</option>
+          <option value="async">异步</option>
         </select>
         <button
           onClick={() => {
             setOffset(0)
             load(0)
           }}
+          disabled={loading}
           className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-sm"
         >
-          查询
+          {loading ? '查询中…' : '查询'}
         </button>
+        {(q || status || mode) && <button onClick={resetFilters} className="text-sm text-slate-500 px-2 hover:text-indigo-600">重置筛选</button>}
       </div>
 
       {pageErr && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-sm">{pageErr}</div>}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-        <table className="w-full text-sm">
+        <table aria-busy={loading} className="tasks-table w-full text-sm">
           <thead className="bg-slate-50 text-xs text-slate-500 border-b">
             <tr>
               <th className="text-left px-4 py-3">文件名 / Hash</th>
@@ -262,14 +295,14 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {tasks.map((t) => {
+            {!loading && tasks.map((t) => {
               const okCount = (t.items || []).filter((i) => i.status === 'succeeded').length
               const totalCount = (t.items || []).length
               return (
                 <tr key={t.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900 flex items-center gap-1.5">
-                      <span>{t.original_filename}</span>
+                      <span title={t.original_filename} className="block max-w-[260px] truncate">{t.original_filename}</span>
                       {t.deduplicated && (
                         <span className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded">秒传</span>
                       )}
@@ -295,7 +328,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                       </a>
                     )}
                     {(t.status === 'failed' || t.status === 'partial_success') && (
-                      <button onClick={() => handleRetry(t.id)} className="text-xs text-amber-600 hover:underline inline-flex items-center gap-0.5">
+                      <button disabled={Boolean(retryingId)} onClick={() => handleRetry(t.id)} className="text-xs text-amber-600 hover:underline inline-flex items-center gap-0.5">
                         <RotateCcw className="w-3.5 h-3.5" /> 重试
                       </button>
                     )}
@@ -303,9 +336,9 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                 </tr>
               )
             })}
-            {tasks.length === 0 && (
+            {(loading || tasks.length === 0) && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">暂无匹配任务。</td>
+                <td colSpan={8}><EmptyState title={loading ? '正在加载备份任务…' : '暂无备份任务'} description={loading ? undefined : q || status || mode ? '试试其他关键词，或重置筛选条件。' : '上传第一份文件，备份进度和恢复入口会显示在这里。'} action={!loading && <button className="text-xs font-medium text-indigo-600" onClick={q || status || mode ? resetFilters : openUploadModal}>{q || status || mode ? '重置筛选' : '上传文件备份'}</button>} /></td>
               </tr>
             )}
           </tbody>
@@ -316,7 +349,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
         <span>第 {Math.floor(offset / limit) + 1} 页 · 共 {total} 条</span>
         <div className="flex gap-2">
           <button
-            disabled={offset === 0}
+            disabled={loading || offset === 0}
             onClick={() => {
               const next = Math.max(0, offset - limit)
               setOffset(next)
@@ -327,7 +360,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
             上一页
           </button>
           <button
-            disabled={offset + limit >= total}
+            disabled={loading || offset + limit >= total}
             onClick={() => {
               const next = offset + limit
               setOffset(next)
@@ -341,7 +374,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
       </div>
 
       {selected && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <Modal title="任务详情" onClose={() => setSelected(null)} size="xl">
           <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-slate-900">任务详情 · {selected.original_filename}</h2>
@@ -351,7 +384,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
               <div>Task ID: <span className="font-mono">{selected.id}</span></div>
               <div>文件大小: {formatBytes(selected.file_size)}</div>
               <div className="col-span-2 break-all">SHA-256: <span className="font-mono">{selected.sha256}</span></div>
-              <div>Webhook 状态: {selected.webhook_status}</div>
+              <div>Webhook 状态: {{ none: '未配置', pending: '待发送', sent: '已发送', failed: '发送失败' }[selected.webhook_status] || selected.webhook_status}</div>
               <div>临时缓冲已清理: {selected.spool_cleaned ? '是' : '否'}</div>
             </div>
 
@@ -385,25 +418,18 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
 
             <div className="flex justify-end gap-2 pt-2 border-t">
               {(selected.status === 'failed' || selected.status === 'partial_success') && (
-                <button onClick={() => handleRetry(selected.id)} className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm">
-                  重试失败上游
+                <button disabled={Boolean(retryingId)} onClick={() => handleRetry(selected.id)} className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm">
+                  {retryingId ? '重试中…' : '重试失败上游'}
                 </button>
               )}
               <button onClick={() => setSelected(null)} className="px-4 py-2 border rounded-lg text-sm">关闭</button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {uploadOpen && (
-        <div
-          className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !uploading && !creatingDefaultClient) {
-              setUploadOpen(false)
-            }
-          }}
-        >
+        <Modal title="上传文件备份" onClose={() => setUploadOpen(false)} busy={uploading || creatingDefaultClient || uploadMetaLoading}>
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -412,18 +438,9 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                   与客户调用备份 API 完全一致：经过单文件大小校验、每日流量熔断、SHA-256 秒传去重、同步/异步分发及审计日志。
                 </p>
               </div>
-              <button
-                type="button"
-                disabled={uploading || creatingDefaultClient}
-                onClick={() => setUploadOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-40"
-                aria-label="关闭弹窗"
-              >
-                <X className="w-4 h-4" />
-              </button>
             </div>
 
-            {clients.length === 0 ? (
+            {uploadMetaLoading ? <div role="status" className="p-8 text-center text-sm text-slate-500">正在加载客户与存储策略…</div> : clients.length === 0 ? (
               <div className="space-y-4">
                 <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm space-y-3">
                   <div>
@@ -511,8 +528,8 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
               <form onSubmit={handleUpload} className="space-y-4 text-sm">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-slate-600 mb-1">归属客户 / 策略 *</label>
-                    <select
+                    <label htmlFor="tasks-field-1" className="block text-xs text-slate-600 mb-1">归属客户 / 策略 *</label>
+                    <select id="tasks-field-1"
                       required
                       value={upClientId}
                       onChange={(e) => onSelectClient(e.target.value)}
@@ -526,15 +543,15 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-600 mb-1">传输模式</label>
-                    <select value={upMode} onChange={(e) => setUpMode(e.target.value as any)} className="w-full px-3 py-1.5 border rounded-lg bg-white">
+                    <label htmlFor="tasks-field-2" className="block text-xs text-slate-600 mb-1">传输模式</label>
+                    <select id="tasks-field-2" value={upMode} onChange={(e) => setUpMode(e.target.value as any)} className="w-full px-3 py-1.5 border rounded-lg bg-white">
                       <option value="sync">sync（同步等待，超时转后台）</option>
                       <option value="async">async（异步队列立即返回）</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-600 mb-1">相对子目录（可选）</label>
-                    <input value={upSubpath} onChange={(e) => setUpSubpath(e.target.value)} placeholder="2026/11" className="w-full px-3 py-1.5 border rounded-lg" />
+                    <label htmlFor="tasks-field-3" className="block text-xs text-slate-600 mb-1">相对子目录（可选）</label>
+                    <input id="tasks-field-3" value={upSubpath} onChange={(e) => setUpSubpath(e.target.value)} placeholder="2026/11" className="w-full px-3 py-1.5 border rounded-lg" />
                   </div>
                   <div className="flex items-end pb-1.5">
                     <label className="inline-flex items-center gap-2 text-xs text-slate-700">
@@ -596,8 +613,8 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                 )}
 
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">选择文件 *</label>
-                  <input
+                  <label htmlFor="tasks-field-4" className="block text-xs text-slate-600 mb-1">选择文件 *</label>
+                  <input id="tasks-field-4"
                     type="file"
                     required
                     onChange={(e) => setUpFile(e.target.files?.[0] || null)}
@@ -611,8 +628,8 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                 </div>
 
                 <div>
-                  <label className="block text-xs text-slate-600 mb-1">自定义 Metadata JSON（可选）</label>
-                  <input
+                  <label htmlFor="tasks-field-5" className="block text-xs text-slate-600 mb-1">自定义 Metadata JSON（可选）</label>
+                  <input id="tasks-field-5"
                     value={upMetadata}
                     onChange={(e) => setUpMetadata(e.target.value)}
                     placeholder='{"source":"web","env":"prod"}'
@@ -676,7 +693,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
               </form>
             )}
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )

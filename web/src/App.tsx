@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Layout, type NavTab } from './components/Layout'
+import { LoadingState } from './components/Feedback'
 import { ToastProvider } from './components/Toast'
 import { AuditPage } from './pages/AuditPage'
 import { AuthPage } from './pages/AuthPages'
@@ -27,6 +28,7 @@ function initialTab(): NavTab {
 
 export function App() {
   const [booting, setBooting] = useState(true)
+  const [bootError, setBootError] = useState('')
   const [initialized, setInitialized] = useState(true)
   const [admin, setAdmin] = useState<Admin | null>(null)
   const [tab, setTab] = useState<NavTab>(initialTab())
@@ -46,6 +48,8 @@ export function App() {
             setAdmin(null)
           }
         }
+      } catch {
+        setBootError('无法连接到服务，请检查服务运行状态后重试。')
       } finally {
         setBooting(false)
       }
@@ -54,13 +58,20 @@ export function App() {
   }, [])
 
   const navigate = (next: NavTab) => {
+    if (next === tab) return
+    if (!window.dispatchEvent(new Event('safekeep:before-navigate', { cancelable: true }))) return
     setTab(next)
     const path = next === 'dashboard' ? '/' : `/${next}`
     window.history.pushState({}, '', path)
+    window.scrollTo({ top: 0 })
   }
 
   if (booting) {
-    return <div className="min-h-screen flex items-center justify-center text-sm text-slate-500">正在加载 SafeKeep...</div>
+    return <div className="min-h-screen grid place-items-center"><LoadingState label="正在加载 SafeKeep…" /></div>
+  }
+
+  if (bootError) {
+    return <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center"><p role="alert" className="text-sm text-slate-600">{bootError}</p><button className="primary-button" onClick={() => window.location.reload()}>重新连接</button></div>
   }
 
   if (!initialized) {
@@ -86,11 +97,12 @@ export function App() {
         onNavigate={navigate}
         admin={admin}
         onLogout={async () => {
+          if (!window.dispatchEvent(new Event('safekeep:before-navigate', { cancelable: true }))) return
           await api.logout()
           setAdmin(null)
         }}
       >
-        {tab === 'dashboard' && <DashboardPage />}
+        {tab === 'dashboard' && <DashboardPage onNavigate={navigate} />}
         {tab === 'tasks' && <TasksPage onNavigate={navigate} />}
         {tab === 'upstreams' && <UpstreamsPage />}
         {tab === 'clients' && <ClientsPage />}

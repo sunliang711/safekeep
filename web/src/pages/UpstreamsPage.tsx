@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Copy, Link2, Plus, Trash2, Wifi } from 'lucide-react'
+import { EmptyState, LoadingState } from '../components/Feedback'
+import { Modal } from '../components/Modal'
 import { api } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
@@ -127,6 +129,11 @@ export const UpstreamsPage: React.FC = () => {
     setModalOpen(true)
   }
 
+  const closeModal = () => {
+    if (JSON.stringify(form) !== initialFormSnap && !confirm('配置尚未保存，确定放弃修改吗？')) return
+    setModalOpen(false)
+  }
+
   const upstreamDirty = !form.id || JSON.stringify(form) !== initialFormSnap
 
   const handleSave = async (e: React.FormEvent) => {
@@ -245,9 +252,16 @@ export const UpstreamsPage: React.FC = () => {
       </div>
 
       {loading ? (
-        <div className="text-sm text-slate-500">加载中...</div>
+        <LoadingState label="正在读取上游存储…" />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {items.length === 0 && <div className="md:col-span-2 bg-white rounded-xl border border-slate-200"><EmptyState title="连接你的第一个云端存储" description="支持 Amazon S3、兼容对象存储与 Dropbox。每个上游都可以独立配置网络代理。" action={<button className="primary-button" onClick={() => {
+            const next = emptyForm()
+            setForm(next)
+            setInitialFormSnap(JSON.stringify(next))
+            setModalErr('')
+            setModalOpen(true)
+          }}><Plus className="w-4 h-4" />添加上游存储</button>} /></div>}
           {items.map((u) => (
             <div key={u.id} className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
               <div className="flex items-start justify-between">
@@ -378,7 +392,7 @@ export const UpstreamsPage: React.FC = () => {
       )}
 
       {modalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <Modal title={form.id ? '编辑上游存储' : '添加上游存储'} onClose={closeModal} busy={saving}>
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
             <h2 className="text-lg font-bold text-slate-900 mb-4">
               {form.id ? '编辑上游存储' : '添加上游存储'}
@@ -391,8 +405,8 @@ export const UpstreamsPage: React.FC = () => {
             <form onSubmit={handleSave} className="space-y-4 text-sm">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block font-medium text-slate-700 mb-1">名称</label>
-                  <input
+                  <label htmlFor="upstreams-field-1" className="block font-medium text-slate-700 mb-1">名称</label>
+                  <input id="upstreams-field-1"
                     required
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -401,8 +415,8 @@ export const UpstreamsPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block font-medium text-slate-700 mb-1">类型</label>
-                  <select
+                  <label htmlFor="upstreams-field-2" className="block font-medium text-slate-700 mb-1">类型</label>
+                  <select id="upstreams-field-2"
                     disabled={Boolean(form.id)}
                     value={form.type}
                     onChange={(e) => setForm({ ...form, type: e.target.value as any })}
@@ -428,32 +442,32 @@ export const UpstreamsPage: React.FC = () => {
                   <div className="font-semibold text-slate-800">S3 存储参数</div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">Bucket *</label>
-                      <input required value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-3" className="block text-xs text-slate-600 mb-1">Bucket *</label>
+                      <input id="upstreams-field-3" required value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">Region</label>
-                      <input value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-4" className="block text-xs text-slate-600 mb-1">Region</label>
+                      <input id="upstreams-field-4" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">Endpoint（MinIO/R2/OSS 可选）</label>
-                      <input value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-5" className="block text-xs text-slate-600 mb-1">Endpoint（MinIO/R2/OSS 可选）</label>
+                      <input id="upstreams-field-5" value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">全局路径前缀</label>
-                      <input value={form.base_prefix} onChange={(e) => setForm({ ...form, base_prefix: e.target.value })} placeholder="backups/" className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-6" className="block text-xs text-slate-600 mb-1">全局路径前缀</label>
+                      <input id="upstreams-field-6" value={form.base_prefix} onChange={(e) => setForm({ ...form, base_prefix: e.target.value })} placeholder="backups/" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">Access Key ID *</label>
-                      <input required value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-7" className="block text-xs text-slate-600 mb-1">Access Key ID *</label>
+                      <input id="upstreams-field-7" required value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">Secret Access Key {form.id ? '（留空则保持不变）' : '*'}</label>
-                      <input type="password" required={!form.id} value={form.secret_access_key} onChange={(e) => setForm({ ...form, secret_access_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-8" className="block text-xs text-slate-600 mb-1">Secret Access Key {form.id ? '（留空则保持不变）' : '*'}</label>
+                      <input id="upstreams-field-8" type="password" required={!form.id} value={form.secret_access_key} onChange={(e) => setForm({ ...form, secret_access_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD_IA / GLACIER）</label>
-                      <input value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-9" className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD_IA / GLACIER）</label>
+                      <input id="upstreams-field-9" value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                   </div>
                   <label className="inline-flex items-center gap-2 text-xs">
@@ -466,20 +480,20 @@ export const UpstreamsPage: React.FC = () => {
                   <div className="font-semibold text-slate-800">Dropbox 参数</div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">App Key *</label>
-                      <input required value={form.app_key} onChange={(e) => setForm({ ...form, app_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-10" className="block text-xs text-slate-600 mb-1">App Key *</label>
+                      <input id="upstreams-field-10" required value={form.app_key} onChange={(e) => setForm({ ...form, app_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">App Secret {form.id ? '（留空不变）' : '*'}</label>
-                      <input type="password" required={!form.id} value={form.app_secret} onChange={(e) => setForm({ ...form, app_secret: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-11" className="block text-xs text-slate-600 mb-1">App Secret {form.id ? '（留空不变）' : '*'}</label>
+                      <input id="upstreams-field-11" type="password" required={!form.id} value={form.app_secret} onChange={(e) => setForm({ ...form, app_secret: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">Dropbox 根目录</label>
-                      <input value={form.root_path} onChange={(e) => setForm({ ...form, root_path: e.target.value })} placeholder="/safekeep" className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-12" className="block text-xs text-slate-600 mb-1">Dropbox 根目录</label>
+                      <input id="upstreams-field-12" value={form.root_path} onChange={(e) => setForm({ ...form, root_path: e.target.value })} placeholder="/safekeep" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">Refresh Token（可选，也可保存后走 Web OAuth2 获取）</label>
-                      <input type="password" value={form.refresh_token} onChange={(e) => setForm({ ...form, refresh_token: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-13" className="block text-xs text-slate-600 mb-1">Refresh Token（可选，也可保存后走 Web OAuth2 获取）</label>
+                      <input id="upstreams-field-13" type="password" value={form.refresh_token} onChange={(e) => setForm({ ...form, refresh_token: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-900 space-y-1">
@@ -513,28 +527,28 @@ export const UpstreamsPage: React.FC = () => {
                 {form.proxy_enabled && (
                   <div className="grid grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">代理协议</label>
-                      <select value={form.proxy_type} onChange={(e) => setForm({ ...form, proxy_type: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white">
+                      <label htmlFor="upstreams-field-14" className="block text-xs text-slate-600 mb-1">代理协议</label>
+                      <select id="upstreams-field-14" value={form.proxy_type} onChange={(e) => setForm({ ...form, proxy_type: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white">
                         <option value="socks5">SOCKS5</option>
                         <option value="http">HTTP</option>
                         <option value="https">HTTPS</option>
                       </select>
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">代理主机</label>
-                      <input required value={form.proxy_host} onChange={(e) => setForm({ ...form, proxy_host: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-15" className="block text-xs text-slate-600 mb-1">代理主机</label>
+                      <input id="upstreams-field-15" required value={form.proxy_host} onChange={(e) => setForm({ ...form, proxy_host: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">端口</label>
-                      <input type="number" required min={1} max={65535} value={form.proxy_port} onChange={(e) => setForm({ ...form, proxy_port: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-16" className="block text-xs text-slate-600 mb-1">端口</label>
+                      <input id="upstreams-field-16" type="number" required min={1} max={65535} value={form.proxy_port} onChange={(e) => setForm({ ...form, proxy_port: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-600 mb-1">代理用户名（可选）</label>
-                      <input value={form.proxy_username} onChange={(e) => setForm({ ...form, proxy_username: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-17" className="block text-xs text-slate-600 mb-1">代理用户名（可选）</label>
+                      <input id="upstreams-field-17" value={form.proxy_username} onChange={(e) => setForm({ ...form, proxy_username: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-xs text-slate-600 mb-1">代理密码（{form.id ? '留空保持不变' : '可选'}）</label>
-                      <input type="password" disabled={form.clear_proxy_password} value={form.proxy_password} onChange={(e) => setForm({ ...form, proxy_password: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg disabled:bg-slate-100" />
+                      <label htmlFor="upstreams-field-18" className="block text-xs text-slate-600 mb-1">代理密码（{form.id ? '留空保持不变' : '可选'}）</label>
+                      <input id="upstreams-field-18" type="password" disabled={form.clear_proxy_password} value={form.proxy_password} onChange={(e) => setForm({ ...form, proxy_password: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg disabled:bg-slate-100" />
                       {form.id && (
                         <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
                           <input type="checkbox" checked={form.clear_proxy_password} onChange={(e) => setForm({ ...form, clear_proxy_password: e.target.checked, proxy_password: '' })} />
@@ -547,7 +561,7 @@ export const UpstreamsPage: React.FC = () => {
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t">
-                <button type="button" disabled={saving} onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-lg border text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+                <button type="button" disabled={saving} onClick={closeModal} className="px-4 py-2 rounded-lg border text-slate-600 hover:bg-slate-50 disabled:opacity-50">
                   取消
                 </button>
                 <button
@@ -560,7 +574,7 @@ export const UpstreamsPage: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )

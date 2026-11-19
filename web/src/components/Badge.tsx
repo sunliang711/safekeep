@@ -17,11 +17,18 @@ const styles: Record<string, string> = {
   async: 'bg-cyan-50 text-cyan-700 border-cyan-200',
 }
 
+const labels: Record<string, string> = {
+  succeeded: '已完成', ok: '正常', success: '成功', enabled: '已启用', running: '进行中',
+  pending: '待处理', partial_success: '部分成功', untested: '未测试', never: '未执行',
+  disabled: '已禁用', failed: '失败', failure: '失败', sync: '同步', async: '异步',
+}
+
 export const StatusBadge: React.FC<{ value: string; label?: string }> = ({ value, label }) => {
   const cls = styles[value] || 'bg-slate-100 text-slate-700 border-slate-200'
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}`}>
-      {label || value}
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full bg-current ${value === 'running' ? 'animate-pulse' : ''}`} aria-hidden="true" />
+      {label || labels[value] || value || '未知'}
     </span>
   )
 }

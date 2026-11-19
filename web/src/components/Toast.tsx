@@ -47,7 +47,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] pointer-events-none">
+      <div aria-live="polite" aria-relevant="additions" className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] pointer-events-none">
         {items.map((item) => {
           const style =
             item.kind === 'success'
@@ -66,6 +66,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return (
             <div
               key={item.id}
+              role={item.kind === 'error' ? 'alert' : 'status'}
               className={`pointer-events-auto flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-lg text-sm ${style}`}
             >
               {icon}
