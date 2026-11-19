@@ -2,12 +2,16 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -184,17 +188,60 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "db_unready", err.Error())
 		return
 	}
+	settings, err := s.store.GetSystemSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "settings_unready", err.Error())
+		return
+	}
+	if err := os.MkdirAll(settings.SpoolDir, 0o750); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "spool_unready", err.Error())
+		return
+	}
+	tmp, err := os.CreateTemp(settings.SpoolDir, ".readyz-*")
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "spool_unwritable", err.Error())
+		return
+	}
+	name := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (s *Server) isAllowedOrigin(r *http.Request, origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	if settings, err := s.store.GetSystemSettings(r.Context()); err == nil && settings.PublicBaseURL != "" {
+		if pub, pErr := url.Parse(settings.PublicBaseURL); pErr == nil && strings.EqualFold(pub.Scheme+"://"+pub.Host, u.Scheme+"://"+u.Host) {
+			return true
+		}
+	}
+	if extra := os.Getenv("SAFEKEEP_CORS_ORIGINS"); extra != "" {
+		for _, item := range strings.Split(extra, ",") {
+			if strings.EqualFold(strings.TrimSpace(item), origin) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Idempotency-Key, X-File-Name, X-Content-SHA256, X-Backup-Mode, X-Backup-Targets, X-Backup-Path, X-Skip-Dedup")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Add("Vary", "Origin")
+			if s.isAllowedOrigin(r, origin) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Idempotency-Key, X-File-Name, X-Content-SHA256, X-Backup-Mode, X-Backup-Targets, X-Backup-Path, X-Skip-Dedup")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			}
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -297,9 +344,19 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "admin account not active")
 			return
 		}
+		pwdV, _ := claims["pwd_v"].(string)
+		if pwdV != passwordVersion(admin.PasswordHash) {
+			writeError(w, http.StatusUnauthorized, "session_revoked", "session revoked due to credential change")
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxAdminKey, admin)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func passwordVersion(hash string) string {
+	sum := sha256.Sum256([]byte(hash))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (s *Server) signAdminToken(admin *db.Admin) (string, error) {
@@ -307,6 +364,7 @@ func (s *Server) signAdminToken(admin *db.Admin) (string, error) {
 	claims := jwt.MapClaims{
 		"sub":      admin.ID,
 		"username": admin.Username,
+		"pwd_v":    passwordVersion(admin.PasswordHash),
 		"iat":      now.Unix(),
 		"exp":      now.Add(24 * time.Hour).Unix(),
 	}

@@ -75,7 +75,7 @@ func NewHTTPClient(cfg Config) (*http.Client, error) {
 			Scheme: strings.ToLower(strings.TrimSpace(cfg.Type)),
 			Host:   addr,
 		}
-		if cfg.Username != "" {
+		if cfg.Username != "" || cfg.Password != "" {
 			u.User = url.UserPassword(cfg.Username, cfg.Password)
 		}
 		tr.Proxy = http.ProxyURL(u)

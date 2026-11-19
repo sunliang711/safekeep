@@ -18,6 +18,11 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+// DataDir returns the configured root data directory.
+func (s *Store) DataDir() string {
+	return s.dataDir
+}
+
 // --- System Settings ---
 
 func (s *Store) GetSystemSettings(ctx context.Context) (config.SystemSettings, error) {
@@ -141,6 +146,38 @@ func (s *Store) ListAdmins(ctx context.Context) ([]Admin, error) {
 	return list, rows.Err()
 }
 
+var ErrAlreadyInitialized = errors.New("system is already initialized")
+
+func (s *Store) CreateInitialAdminIfEmpty(ctx context.Context, a *Admin) error {
+	now := time.Now().UTC()
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = now
+	}
+	a.UpdatedAt = now
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var n int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrAlreadyInitialized
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO admins(id, username, password_hash, is_active, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		a.ID, a.Username, a.PasswordHash, boolToInt(a.IsActive), a.CreatedAt, a.UpdatedAt,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) UpdateAdminLogin(ctx context.Context, id string) error {
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `UPDATE admins SET last_login_at = ?, updated_at = ? WHERE id = ?`, now, now, id)
@@ -148,13 +185,27 @@ func (s *Store) UpdateAdminLogin(ctx context.Context, id string) error {
 }
 
 func (s *Store) UpdateAdminPassword(ctx context.Context, id, passwordHash string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE admins SET password_hash = ?, updated_at = ? WHERE id = ?`, passwordHash, time.Now().UTC(), id)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE admins SET password_hash = ?, updated_at = ? WHERE id = ?`, passwordHash, time.Now().UTC(), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) UpdateAdminActive(ctx context.Context, id string, active bool) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE admins SET is_active = ?, updated_at = ? WHERE id = ?`, boolToInt(active), time.Now().UTC(), id)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE admins SET is_active = ?, updated_at = ? WHERE id = ?`, boolToInt(active), time.Now().UTC(), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 type rowScanner interface {
@@ -229,10 +280,12 @@ func (s *Store) UpdateUpstream(ctx context.Context, u *Upstream) error {
 	return nil
 }
 
+// UpdateUpstreamConfigEncrypted persists refreshed OAuth tokens without bumping updated_at
+// so cached provider HTTP transports remain active and do not churn on token refresh.
 func (s *Store) UpdateUpstreamConfigEncrypted(ctx context.Context, id, configEncrypted string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE upstreams SET config_encrypted = ?, updated_at = ? WHERE id = ?`,
-		configEncrypted, time.Now().UTC(), id,
+		`UPDATE upstreams SET config_encrypted = ? WHERE id = ?`,
+		configEncrypted, id,
 	)
 	return err
 }
@@ -408,6 +461,14 @@ func (s *Store) SetClientUpstreams(ctx context.Context, clientID string, upstrea
 		return err
 	}
 	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients WHERE id = ?`, clientID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM client_upstreams WHERE client_id = ?`, clientID); err != nil {
 		return err

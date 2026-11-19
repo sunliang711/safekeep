@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -246,9 +247,7 @@ func (s *Server) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 	f := parseAuditFilter(r)
-	f.Limit = 500
-	f.Offset = 0
-	logs, _, err := s.store.ListAuditLogs(r.Context(), f)
+	logs, err := s.store.ExportAllAuditLogs(r.Context(), f)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "export_failed", err.Error())
 		return
@@ -327,6 +326,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(settings.SpoolDir) == "" || settings.WorkerConcurrency <= 0 || settings.SyncTimeoutSec <= 0 {
 		writeError(w, http.StatusBadRequest, "validation_error", "spool_dir, worker_concurrency > 0, and sync_timeout_sec > 0 are required")
+		return
+	}
+	if filepath.Clean(settings.SpoolDir) == filepath.Clean(s.store.DataDir()) {
+		writeError(w, http.StatusBadRequest, "invalid_spool_dir", "spool_dir must be a dedicated subdirectory, not the root data_dir")
 		return
 	}
 	if err := s.store.UpdateSystemSettings(r.Context(), settings, admin.Username); err != nil {
@@ -416,6 +419,10 @@ func (s *Server) handleUpdateAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.UpdateAdminActive(r.Context(), id, *req.IsActive); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", "admin not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "update_failed", err.Error())
 			return
 		}
@@ -431,9 +438,22 @@ func (s *Server) handleUpdateAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.UpdateAdminPassword(r.Context(), id, hash); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", "admin not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "update_failed", err.Error())
 			return
 		}
+	}
+	a, err := s.store.GetAdminByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "admin not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
 	}
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
@@ -444,7 +464,6 @@ func (s *Server) handleUpdateAdmin(w http.ResponseWriter, r *http.Request) {
 		ResourceID:   id,
 		IPAddress:    clientIP(r),
 	})
-	a, _ := s.store.GetAdminByID(r.Context(), id)
 	writeJSON(w, http.StatusOK, a)
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"safekeep/internal/audit"
+	"safekeep/internal/backup"
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
 	"safekeep/internal/proxy"
@@ -34,16 +36,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
-	n, err := s.store.CountAdmins(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
-	}
-	if n > 0 {
-		writeError(w, http.StatusConflict, "already_initialized", "system is already initialized")
-		return
-	}
-
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -68,7 +60,11 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: hash,
 		IsActive:     true,
 	}
-	if err := s.store.CreateAdmin(r.Context(), admin); err != nil {
+	if err := s.store.CreateInitialAdminIfEmpty(r.Context(), admin); err != nil {
+		if errors.Is(err, db.ErrAlreadyInitialized) {
+			writeError(w, http.StatusConflict, "already_initialized", "system is already initialized")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "create_failed", err.Error())
 		return
 	}
@@ -78,7 +74,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "token_error", err.Error())
 		return
 	}
-	s.setAdminCookie(w, tok)
+	s.setAdminCookie(w, r, tok)
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
 		ActorID:      admin.ID,
@@ -124,7 +120,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "token_error", err.Error())
 		return
 	}
-	s.setAdminCookie(w, tok)
+	s.setAdminCookie(w, r, tok)
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
 		ActorID:      admin.ID,
@@ -145,6 +141,7 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isHTTPS(r),
 		MaxAge:   -1,
 		SameSite: http.SameSiteLaxMode,
 	})
@@ -182,6 +179,10 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "update_failed", err.Error())
 		return
 	}
+	admin.PasswordHash = hash
+	if tok, err := s.signAdminToken(admin); err == nil {
+		s.setAdminCookie(w, r, tok)
+	}
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
 		ActorID:      admin.ID,
@@ -196,12 +197,17 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) setAdminCookie(w http.ResponseWriter, token string) {
+func isHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+func (s *Server) setAdminCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400,
 	})
@@ -344,6 +350,11 @@ func (s *Server) handleCreateUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateUpstreamConfig(req.Type, req.Config); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+		return
+	}
+
 	cfgEnc, err := s.cipher.EncryptString(string(req.Config))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encrypt_error", err.Error())
@@ -415,6 +426,10 @@ func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
 		return
 	}
+	if err := validateUpstreamConfig(existing.Type, mergedConfig); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+		return
+	}
 
 	pPass, _ := s.cipher.DecryptString(existing.ProxyPasswordEncrypted)
 	if req.ProxyPassword != nil {
@@ -470,6 +485,34 @@ func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
 		Detail:       map[string]any{"name": existing.Name, "enabled": existing.Enabled, "proxy_enabled": existing.ProxyEnabled},
 	})
 	writeJSON(w, http.StatusOK, s.toUpstreamDTO(*existing))
+}
+
+func validateUpstreamConfig(upstreamType string, raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return errors.New("config is required")
+	}
+	switch upstreamType {
+	case "s3":
+		var cfg storage.S3Config
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return fmt.Errorf("invalid s3 config JSON: %w", err)
+		}
+		if strings.TrimSpace(cfg.Bucket) == "" {
+			return errors.New("s3 bucket is required")
+		}
+		if strings.TrimSpace(cfg.AccessKeyID) == "" || strings.TrimSpace(cfg.SecretAccessKey) == "" {
+			return errors.New("s3 access_key_id and secret_access_key are required")
+		}
+	case "dropbox":
+		var cfg storage.DropboxConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return fmt.Errorf("invalid dropbox config JSON: %w", err)
+		}
+		if strings.TrimSpace(cfg.AppKey) == "" {
+			return errors.New("dropbox app_key is required")
+		}
+	}
+	return nil
 }
 
 func mergeUpstreamConfigSecrets(upstreamType string, existingRaw, incomingRaw json.RawMessage) ([]byte, error) {
@@ -590,6 +633,27 @@ func (s *Server) handleTestUpstream(w http.ResponseWriter, r *http.Request) {
 
 // --- Dropbox Web OAuth2 Flow ---
 
+func (s *Server) resolveDropboxRedirectURI(r *http.Request) string {
+	settings, _ := s.store.GetSystemSettings(r.Context())
+	baseURL := strings.TrimRight(settings.PublicBaseURL, "/")
+	if baseURL == "" {
+		scheme := "http"
+		if isHTTPS(r) {
+			scheme = "https"
+		}
+		baseURL = scheme + "://" + r.Host
+	}
+	return baseURL + "/admin/api/v1/oauth/dropbox/callback"
+}
+
+func (s *Server) pruneExpiredOAuthStatesLocked(now time.Time) {
+	for k, v := range s.oauthStates {
+		if now.After(v.ExpiresAt) {
+			delete(s.oauthStates, k)
+		}
+	}
+}
+
 func (s *Server) handleDropboxOAuthStart(w http.ResponseWriter, r *http.Request) {
 	admin := currentAdmin(r)
 	id := chi.URLParam(r, "id")
@@ -609,28 +673,21 @@ func (s *Server) handleDropboxOAuthStart(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	settings, _ := s.store.GetSystemSettings(r.Context())
-	baseURL := strings.TrimRight(settings.PublicBaseURL, "/")
-	if baseURL == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		baseURL = scheme + "://" + r.Host
-	}
-	redirectURI := baseURL + "/admin/api/v1/oauth/dropbox/callback"
+	redirectURI := s.resolveDropboxRedirectURI(r)
 
 	state, err := crypto.RandomToken(16)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "state_error", err.Error())
 		return
 	}
+	now := time.Now()
 	s.oauthMu.Lock()
+	s.pruneExpiredOAuthStatesLocked(now)
 	s.oauthStates[state] = oauthStateEntry{
 		UpstreamID: u.ID,
 		AdminID:    admin.ID,
 		AdminName:  admin.Username,
-		ExpiresAt:  time.Now().Add(10 * time.Minute),
+		ExpiresAt:  now.Add(10 * time.Minute),
 	}
 	s.oauthMu.Unlock()
 
@@ -642,93 +699,105 @@ func (s *Server) handleDropboxOAuthStart(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleDropboxOAuthCallback(w http.ResponseWriter, r *http.Request) {
-	code := r.URL.Query().Get("code")
+	redirectErr := func(reason string) {
+		http.Redirect(w, r, "/upstreams?oauth=error&reason="+url.QueryEscape(reason), http.StatusFound)
+	}
+
 	state := r.URL.Query().Get("state")
-	if code == "" || state == "" {
-		http.Error(w, "missing code or state", http.StatusBadRequest)
+	if state != "" {
+		s.oauthMu.Lock()
+		entry, ok := s.oauthStates[state]
+		delete(s.oauthStates, state)
+		s.pruneExpiredOAuthStatesLocked(time.Now())
+		s.oauthMu.Unlock()
+
+		if errParam := r.URL.Query().Get("error"); errParam != "" {
+			desc := r.URL.Query().Get("error_description")
+			if desc == "" {
+				desc = errParam
+			}
+			redirectErr(desc)
+			return
+		}
+		if !ok || time.Now().After(entry.ExpiresAt) {
+			redirectErr("invalid or expired OAuth state")
+			return
+		}
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			redirectErr("missing authorization code")
+			return
+		}
+
+		u, err := s.store.GetUpstreamByID(r.Context(), entry.UpstreamID)
+		if err != nil {
+			redirectErr("upstream not found")
+			return
+		}
+		plain, err := s.cipher.DecryptString(u.ConfigEncrypted)
+		if err != nil {
+			redirectErr(err.Error())
+			return
+		}
+		var cfg storage.DropboxConfig
+		if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
+			redirectErr(err.Error())
+			return
+		}
+
+		pCfg, err := storage.DecryptProxyConfig(s.cipher, u)
+		if err != nil {
+			redirectErr(err.Error())
+			return
+		}
+		httpClient, err := proxy.NewHTTPClient(pCfg)
+		if err != nil {
+			redirectErr(err.Error())
+			return
+		}
+
+		redirectURI := s.resolveDropboxRedirectURI(r)
+		tokRes, err := dropbox.ExchangeCode(r.Context(), httpClient, cfg.APIBaseURL, cfg.AppKey, cfg.AppSecret, code, redirectURI)
+		if err != nil {
+			redirectErr(fmt.Sprintf("Dropbox OAuth failed: %v", err))
+			return
+		}
+
+		cfg.AccessToken = tokRes.AccessToken
+		if tokRes.RefreshToken != "" {
+			cfg.RefreshToken = tokRes.RefreshToken
+		}
+		if tokRes.ExpiresIn > 0 {
+			cfg.TokenExpiresAt = time.Now().UTC().Add(time.Duration(tokRes.ExpiresIn) * time.Second)
+		}
+		if tokRes.Email != "" {
+			cfg.AccountEmail = tokRes.Email
+		}
+		newJSON, _ := json.Marshal(cfg)
+		enc, _ := s.cipher.EncryptString(string(newJSON))
+		if err := s.store.UpdateUpstreamConfigEncrypted(r.Context(), u.ID, enc); err != nil {
+			redirectErr(err.Error())
+			return
+		}
+		_ = s.store.UpdateUpstreamTestStatus(r.Context(), u.ID, "ok", "")
+		s.registry.Invalidate(u.ID)
+
+		s.auditLog.Record(r.Context(), audit.Event{
+			ActorType:    "admin",
+			ActorID:      entry.AdminID,
+			ActorName:    entry.AdminName,
+			Action:       "upstream.dropbox_oauth",
+			ResourceType: "upstream",
+			ResourceID:   u.ID,
+			IPAddress:    clientIP(r),
+			Detail:       map[string]any{"account_email": tokRes.Email},
+		})
+
+		http.Redirect(w, r, "/upstreams?oauth=success", http.StatusFound)
 		return
 	}
 
-	s.oauthMu.Lock()
-	entry, ok := s.oauthStates[state]
-	delete(s.oauthStates, state)
-	s.oauthMu.Unlock()
-	if !ok || time.Now().After(entry.ExpiresAt) {
-		http.Error(w, "invalid or expired OAuth state", http.StatusBadRequest)
-		return
-	}
-
-	u, err := s.store.GetUpstreamByID(r.Context(), entry.UpstreamID)
-	if err != nil {
-		http.Error(w, "upstream not found", http.StatusNotFound)
-		return
-	}
-	plain, err := s.cipher.DecryptString(u.ConfigEncrypted)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	var cfg storage.DropboxConfig
-	if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	pCfg, err := storage.DecryptProxyConfig(s.cipher, u)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	httpClient, err := proxy.NewHTTPClient(pCfg)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	settings, _ := s.store.GetSystemSettings(r.Context())
-	baseURL := strings.TrimRight(settings.PublicBaseURL, "/")
-	if baseURL == "" {
-		baseURL = "http://" + r.Host
-	}
-	redirectURI := baseURL + "/admin/api/v1/oauth/dropbox/callback"
-
-	tokRes, err := dropbox.ExchangeCode(r.Context(), httpClient, cfg.APIBaseURL, cfg.AppKey, cfg.AppSecret, code, redirectURI)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Dropbox OAuth failed: %v", err), http.StatusBadGateway)
-		return
-	}
-
-	cfg.AccessToken = tokRes.AccessToken
-	if tokRes.RefreshToken != "" {
-		cfg.RefreshToken = tokRes.RefreshToken
-	}
-	if tokRes.ExpiresIn > 0 {
-		cfg.TokenExpiresAt = time.Now().UTC().Add(time.Duration(tokRes.ExpiresIn) * time.Second)
-	}
-	if tokRes.Email != "" {
-		cfg.AccountEmail = tokRes.Email
-	}
-	newJSON, _ := json.Marshal(cfg)
-	enc, _ := s.cipher.EncryptString(string(newJSON))
-	if err := s.store.UpdateUpstreamConfigEncrypted(r.Context(), u.ID, enc); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	_ = s.store.UpdateUpstreamTestStatus(r.Context(), u.ID, "ok", "")
-	s.registry.Invalidate(u.ID)
-
-	s.auditLog.Record(r.Context(), audit.Event{
-		ActorType:    "admin",
-		ActorID:      entry.AdminID,
-		ActorName:    entry.AdminName,
-		Action:       "upstream.dropbox_oauth",
-		ResourceType: "upstream",
-		ResourceID:   u.ID,
-		IPAddress:    clientIP(r),
-		Detail:       map[string]any{"account_email": tokRes.Email},
-	})
-
-	http.Redirect(w, r, "/upstreams?oauth=success", http.StatusFound)
+	redirectErr("missing OAuth state")
 }
 
 // --- Clients / API Keys ---
@@ -807,6 +876,14 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DefaultMode != "sync" && req.DefaultMode != "async" {
 		writeError(w, http.StatusBadRequest, "validation_error", "default_mode must be sync or async")
+		return
+	}
+	if err := backup.ValidateWebhookURL(req.WebhookURL); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_webhook_url", err.Error())
+		return
+	}
+	if strings.Contains(req.PathPrefix, "..") {
+		writeError(w, http.StatusBadRequest, "invalid_path_prefix", "path_prefix cannot contain '..'")
 		return
 	}
 
@@ -911,6 +988,14 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	c.Enabled = req.Enabled
 	if req.DefaultMode == "sync" || req.DefaultMode == "async" {
 		c.DefaultMode = req.DefaultMode
+	}
+	if strings.Contains(req.PathPrefix, "..") {
+		writeError(w, http.StatusBadRequest, "invalid_path_prefix", "path_prefix cannot contain '..'")
+		return
+	}
+	if err := backup.ValidateWebhookURL(req.WebhookURL); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_webhook_url", err.Error())
+		return
 	}
 	c.PathPrefix = strings.Trim(req.PathPrefix, "/")
 	c.MaxFileSizeBytes = req.MaxFileSizeBytes
@@ -1048,6 +1133,10 @@ func (s *Server) handleSetClientUpstreams(w http.ResponseWriter, r *http.Request
 		})
 	}
 	if err := s.store.SetClientUpstreams(r.Context(), id, cuList); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "client not found")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "set_upstreams_failed", err.Error())
 		return
 	}

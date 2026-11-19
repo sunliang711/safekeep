@@ -430,4 +430,63 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	if auditList.Total < 5 {
 		t.Fatalf("expected audit logs recorded, got total=%d", auditList.Total)
 	}
+
+	// 10. Multipart fields AFTER file (targets=mock-s3, dedup=false) must be honored
+	var mpBuf bytes.Buffer
+	mw := multipart.NewWriter(&mpBuf)
+	fw, _ := mw.CreateFormFile("file", "after.txt")
+	_, _ = fw.Write(payload) // same hash as step 5, but dedup=false sent AFTER file!
+	_ = mw.WriteField("mode", "sync")
+	_ = mw.WriteField("targets", "mock-s3")
+	_ = mw.WriteField("dedup", "false")
+	_ = mw.Close()
+
+	mpReq, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/backups", &mpBuf)
+	mpReq.Header.Set("Content-Type", mw.FormDataContentType())
+	mpReq.Header.Set("X-API-Key", clOut.APIKey)
+	mpResp, err := http.DefaultClient.Do(mpReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mpOut backup.UploadResponse
+	_ = json.NewDecoder(mpResp.Body).Decode(&mpOut)
+	mpResp.Body.Close()
+	if mpResp.StatusCode != http.StatusOK || mpOut.Task.Deduplicated || len(mpOut.Task.Items) != 1 || mpOut.Task.Items[0].UpstreamName != "mock-s3" {
+		t.Fatalf("expected trailing multipart fields honored (1 item mock-s3, dedup=false), got status=%d task=%+v", mpResp.StatusCode, mpOut.Task)
+	}
+
+	// 11. Untrusted CORS origin must not be reflected
+	corsReq, _ := http.NewRequest(http.MethodOptions, env.srv.URL+"/admin/api/v1/auth/me", nil)
+	corsReq.Header.Set("Origin", "https://evil.example.com")
+	corsResp, err := http.DefaultClient.Do(corsReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corsResp.Body.Close()
+	if gotOrigin := corsResp.Header.Get("Access-Control-Allow-Origin"); gotOrigin != "" {
+		t.Fatalf("expected untrusted CORS origin to be rejected, got %q", gotOrigin)
+	}
+
+	// 12. Changing admin password must revoke old JWT session
+	oldCookies := append([]*http.Cookie(nil), env.cookies...)
+	chgResp := env.adminReq(t, http.MethodPut, "/admin/api/v1/auth/password", map[string]string{
+		"old_password": "password123",
+		"new_password": "newpassword456",
+	})
+	chgResp.Body.Close()
+	if chgResp.StatusCode != http.StatusOK {
+		t.Fatalf("change password failed: %d", chgResp.StatusCode)
+	}
+	staleReq, _ := http.NewRequest(http.MethodGet, env.srv.URL+"/admin/api/v1/auth/me", nil)
+	for _, c := range oldCookies {
+		staleReq.AddCookie(c)
+	}
+	staleResp, err := http.DefaultClient.Do(staleReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleResp.Body.Close()
+	if staleResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected old session token revoked after password change, got %d", staleResp.StatusCode)
+	}
 }

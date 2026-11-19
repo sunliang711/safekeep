@@ -142,7 +142,7 @@ func (p *Provider) RefreshNow(ctx context.Context) error {
 
 func (p *Provider) Upload(ctx context.Context, remotePath string, body io.ReadSeeker, size int64, _ string) (*storage.UploadResult, error) {
 	if size <= singleUploadLimit {
-		return p.uploadSingle(ctx, remotePath, body)
+		return p.uploadSingle(ctx, remotePath, body, size)
 	}
 	return p.uploadSession(ctx, remotePath, body, size)
 }
@@ -154,7 +154,7 @@ type dropboxFileMeta struct {
 	Size        int64  `json:"size"`
 }
 
-func (p *Provider) uploadSingle(ctx context.Context, remotePath string, body io.ReadSeeker) (*storage.UploadResult, error) {
+func (p *Provider) uploadSingle(ctx context.Context, remotePath string, body io.ReadSeeker, size int64) (*storage.UploadResult, error) {
 	targetPath := p.fullPath(remotePath)
 	argJSON, _ := json.Marshal(map[string]any{
 		"path":       targetPath,
@@ -172,9 +172,16 @@ func (p *Provider) uploadSingle(ctx context.Context, remotePath string, body io.
 			return nil, err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.ContentBaseURL, "/")+"/2/files/upload", body)
+		var bodyReader io.Reader = body
+		if size == 0 {
+			bodyReader = http.NoBody
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.ContentBaseURL, "/")+"/2/files/upload", bodyReader)
 		if err != nil {
 			return nil, err
+		}
+		if size >= 0 {
+			req.ContentLength = size
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("Content-Type", "application/octet-stream")
@@ -211,12 +218,48 @@ func (p *Provider) uploadSingle(ctx context.Context, remotePath string, body io.
 	return nil, fmt.Errorf("dropbox upload unauthorized after refresh")
 }
 
+func (p *Provider) doChunkPost(ctx context.Context, endpoint string, arg any, chunk []byte) ([]byte, error) {
+	argJSON, _ := json.Marshal(arg)
+	urlStr := strings.TrimRight(p.cfg.ContentBaseURL, "/") + endpoint
+
+	for attempt := 0; attempt < 2; attempt++ {
+		tok, err := p.ensureToken(ctx, attempt > 0)
+		if err != nil {
+			return nil, err
+		}
+		var bodyReader io.Reader = http.NoBody
+		if len(chunk) > 0 {
+			bodyReader = bytes.NewReader(chunk)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, bodyReader)
+		if err != nil {
+			return nil, err
+		}
+		req.ContentLength = int64(len(chunk))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("Dropbox-API-Arg", string(argJSON))
+
+		resp, err := p.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
+		}
+		return respBytes, nil
+	}
+	return nil, fmt.Errorf("unauthorized after token refresh")
+}
+
 func (p *Provider) uploadSession(ctx context.Context, remotePath string, body io.ReadSeeker, totalSize int64) (*storage.UploadResult, error) {
 	if _, err := body.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
-	tok, err := p.ensureToken(ctx, false)
-	if err != nil {
 		return nil, err
 	}
 
@@ -227,23 +270,9 @@ func (p *Provider) uploadSession(ctx context.Context, remotePath string, body io
 	}
 
 	// 1. Start session
-	startArg, _ := json.Marshal(map[string]any{"close": false})
-	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.ContentBaseURL, "/")+"/2/files/upload_session/start", bytes.NewReader(buf[:n]))
-	if err != nil {
-		return nil, err
-	}
-	startReq.Header.Set("Authorization", "Bearer "+tok)
-	startReq.Header.Set("Content-Type", "application/octet-stream")
-	startReq.Header.Set("Dropbox-API-Arg", string(startArg))
-
-	startResp, err := p.httpClient.Do(startReq)
+	startBytes, err := p.doChunkPost(ctx, "/2/files/upload_session/start", map[string]any{"close": false}, buf[:n])
 	if err != nil {
 		return nil, fmt.Errorf("dropbox session start: %w", err)
-	}
-	startBytes, _ := io.ReadAll(io.LimitReader(startResp.Body, 1<<20))
-	startResp.Body.Close()
-	if startResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("dropbox session start (%d): %s", startResp.StatusCode, strings.TrimSpace(string(startBytes)))
 	}
 	var startOut struct {
 		SessionID string `json:"session_id"`
@@ -261,15 +290,11 @@ func (p *Provider) uploadSession(ctx context.Context, remotePath string, body io
 		if n == 0 {
 			break
 		}
-		tok, err = p.ensureToken(ctx, false)
-		if err != nil {
-			return nil, err
-		}
 
 		isLast := offset+int64(n) >= totalSize
 		if isLast {
 			targetPath := p.fullPath(remotePath)
-			finArg, _ := json.Marshal(map[string]any{
+			finBytes, err := p.doChunkPost(ctx, "/2/files/upload_session/finish", map[string]any{
 				"cursor": map[string]any{
 					"session_id": startOut.SessionID,
 					"offset":     offset,
@@ -280,23 +305,9 @@ func (p *Provider) uploadSession(ctx context.Context, remotePath string, body io
 					"autorename": true,
 					"mute":       true,
 				},
-			})
-			finReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.ContentBaseURL, "/")+"/2/files/upload_session/finish", bytes.NewReader(buf[:n]))
-			if err != nil {
-				return nil, err
-			}
-			finReq.Header.Set("Authorization", "Bearer "+tok)
-			finReq.Header.Set("Content-Type", "application/octet-stream")
-			finReq.Header.Set("Dropbox-API-Arg", string(finArg))
-
-			finResp, err := p.httpClient.Do(finReq)
+			}, buf[:n])
 			if err != nil {
 				return nil, fmt.Errorf("dropbox session finish: %w", err)
-			}
-			finBytes, _ := io.ReadAll(io.LimitReader(finResp.Body, 1<<20))
-			finResp.Body.Close()
-			if finResp.StatusCode != http.StatusOK {
-				return nil, fmt.Errorf("dropbox session finish (%d): %s", finResp.StatusCode, strings.TrimSpace(string(finBytes)))
 			}
 			var meta dropboxFileMeta
 			if err := json.Unmarshal(finBytes, &meta); err != nil {
@@ -313,29 +324,14 @@ func (p *Provider) uploadSession(ctx context.Context, remotePath string, body io
 			}, nil
 		}
 
-		appendArg, _ := json.Marshal(map[string]any{
+		if _, err := p.doChunkPost(ctx, "/2/files/upload_session/append_v2", map[string]any{
 			"cursor": map[string]any{
 				"session_id": startOut.SessionID,
 				"offset":     offset,
 			},
 			"close": false,
-		})
-		appReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.ContentBaseURL, "/")+"/2/files/upload_session/append_v2", bytes.NewReader(buf[:n]))
-		if err != nil {
-			return nil, err
-		}
-		appReq.Header.Set("Authorization", "Bearer "+tok)
-		appReq.Header.Set("Content-Type", "application/octet-stream")
-		appReq.Header.Set("Dropbox-API-Arg", string(appendArg))
-
-		appResp, err := p.httpClient.Do(appReq)
-		if err != nil {
+		}, buf[:n]); err != nil {
 			return nil, fmt.Errorf("dropbox session append: %w", err)
-		}
-		appBytes, _ := io.ReadAll(io.LimitReader(appResp.Body, 1<<20))
-		appResp.Body.Close()
-		if appResp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("dropbox session append (%d): %s", appResp.StatusCode, strings.TrimSpace(string(appBytes)))
 		}
 		offset += int64(n)
 	}
@@ -400,26 +396,32 @@ func (p *Provider) Delete(ctx context.Context, remotePath string) error {
 	}
 	bodyJSON, _ := json.Marshal(map[string]string{"path": targetPath})
 
-	tok, err := p.ensureToken(ctx, false)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.APIBaseURL, "/")+"/2/files/delete_v2", bytes.NewReader(bodyJSON))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	for attempt := 0; attempt < 2; attempt++ {
+		tok, err := p.ensureToken(ctx, attempt > 0)
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.APIBaseURL, "/")+"/2/files/delete_v2", bytes.NewReader(bodyJSON))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := p.httpClient.Do(req)
+		if err != nil {
+			return err
+		}
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return fmt.Errorf("dropbox delete failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("dropbox delete failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		}
+		return nil
 	}
-	return nil
+	return fmt.Errorf("dropbox delete unauthorized after refresh")
 }
 
 func (p *Provider) TestConnection(ctx context.Context) error {

@@ -145,3 +145,103 @@ func TestExportInspectImportReencryptsSecrets(t *testing.T) {
 		t.Fatalf("expected original API key to resolve client in B, err=%v", err)
 	}
 }
+
+func TestMigrationNoTruncationAndMergeOverwritePreservesTasks(t *testing.T) {
+	ctx := context.Background()
+	dirA := t.TempDir()
+	storeA, err := db.Open(filepath.Join(dirA, "a.db"), dirA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeA.Close()
+	cipherA, _ := crypto.NewCipher(bytes.Repeat([]byte{0x11}, 32))
+
+	_ = storeA.CreateAdmin(ctx, &db.Admin{ID: "adm_A", Username: "admin", PasswordHash: "hA", IsActive: true})
+	cfgEncA, _ := cipherA.EncryptString(`{"bucket":"b1","access_key_id":"ak","secret_access_key":"sk"}`)
+	_ = storeA.CreateUpstream(ctx, &db.Upstream{ID: "up_A", Name: "shared-s3", Type: "s3", Enabled: true, ConfigEncrypted: cfgEncA})
+	_, p1, h1, _ := crypto.GenerateAPIKey()
+	_ = storeA.CreateClient(ctx, &db.Client{ID: "cl_A", Name: "shared-client", KeyPrefix: p1, KeyHash: h1, Enabled: true, DefaultMode: "async"},
+		[]db.ClientUpstream{{ClientID: "cl_A", UpstreamID: "up_A", IsDefault: true, Priority: 10}})
+
+	// Create 30 tasks and 65 audit logs (> old 20 / 50 caps)
+	for i := 0; i < 30; i++ {
+		tid := crypto.NewULID()
+		_ = storeA.CreateBackupTask(ctx, &db.BackupTask{
+			ID: tid, ClientID: "cl_A", Mode: "sync", Status: "succeeded",
+			OriginalFilename: "f.bin", ContentType: "application/octet-stream", FileSize: 10, SHA256: tid, SpoolCleaned: true,
+		}, []db.BackupTaskItem{{
+			ID: crypto.NewULID(), TaskID: tid, UpstreamID: "up_A", UpstreamName: "shared-s3", UpstreamType: "s3",
+			RemotePath: "p/" + tid, Status: "succeeded", MaxAttempts: 3,
+		}})
+	}
+	for i := 0; i < 65; i++ {
+		_ = storeA.InsertAuditLog(ctx, &db.AuditLog{
+			ActorType: "admin", ActorID: "adm_A", ActorName: "admin",
+			Action: "test.action", ResourceType: "test", ResourceID: "r", Status: "success",
+		})
+	}
+
+	migA := NewService(storeA, cipherA)
+	bundle, err := migA.Export(ctx, ExportOptions{
+		IncludeTasks:     true,
+		IncludeAdmins:    true,
+		IncludeAuditLogs: true,
+		Passphrase:       "bundle-pass-99",
+	})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	// Target B already has different IDs with colliding names + its own task on shared-client
+	dirB := t.TempDir()
+	storeB, err := db.Open(filepath.Join(dirB, "b.db"), dirB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeB.Close()
+	cipherB, _ := crypto.NewCipher(bytes.Repeat([]byte{0x22}, 32))
+
+	_ = storeB.CreateAdmin(ctx, &db.Admin{ID: "adm_B", Username: "admin", PasswordHash: "hB", IsActive: true})
+	cfgEncB, _ := cipherB.EncryptString(`{"bucket":"b_old","access_key_id":"ak","secret_access_key":"sk"}`)
+	_ = storeB.CreateUpstream(ctx, &db.Upstream{ID: "up_B", Name: "shared-s3", Type: "s3", Enabled: true, ConfigEncrypted: cfgEncB})
+	_, p2, h2, _ := crypto.GenerateAPIKey()
+	_ = storeB.CreateClient(ctx, &db.Client{ID: "cl_B", Name: "shared-client", KeyPrefix: p2, KeyHash: h2, Enabled: true, DefaultMode: "async"},
+		[]db.ClientUpstream{{ClientID: "cl_B", UpstreamID: "up_B", IsDefault: true, Priority: 10}})
+	_ = storeB.CreateBackupTask(ctx, &db.BackupTask{
+		ID: "existing_task_B", ClientID: "cl_B", Mode: "sync", Status: "succeeded",
+		OriginalFilename: "keep.bin", ContentType: "application/octet-stream", FileSize: 5, SHA256: "keephash", SpoolCleaned: true,
+	}, nil)
+
+	migB := NewService(storeB, cipherB)
+	summary, err := migB.Inspect(ctx, bundle, "bundle-pass-99")
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if summary.Counts.BackupTasks != 30 || summary.Counts.AuditLogs != 65 {
+		t.Fatalf("expected 30 tasks and 65 audit logs (no truncation), got %+v", summary.Counts)
+	}
+	if len(summary.AdminConflicts) != 1 || len(summary.UpstreamConflicts) != 1 || len(summary.ClientConflicts) != 1 {
+		t.Fatalf("expected conflicts detected, got %+v", summary)
+	}
+
+	counts, err := migB.Import(ctx, bundle, ImportOptions{
+		Passphrase:       "bundle-pass-99",
+		Mode:             "merge",
+		ConflictStrategy: "overwrite",
+		IncludeTasks:     true,
+		IncludeAdmins:    true,
+		IncludeAuditLogs: true,
+	})
+	if err != nil {
+		t.Fatalf("Import merge/overwrite failed: %v", err)
+	}
+	if counts.BackupTasks != 30 || counts.AuditLogs != 65 || counts.Admins != 1 {
+		t.Fatalf("unexpected counts: %+v", counts)
+	}
+
+	// Ensure pre-existing task in B was NOT cascade-deleted!
+	if _, err := storeB.GetBackupTask(ctx, "existing_task_B"); err != nil {
+		t.Fatalf("expected existing_task_B to survive merge/overwrite, got err=%v", err)
+	}
+}
+

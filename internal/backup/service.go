@@ -9,12 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"safekeep/internal/crypto"
@@ -38,19 +41,22 @@ func (e *HTTPError) Error() string {
 	return e.Message
 }
 
-// UploadRequest carries parsed parameters and the incoming file stream.
+// UploadRequest carries parsed parameters and the incoming file stream (or pre-spooled file).
 type UploadRequest struct {
-	Client         *db.Client
-	Filename       string
-	ContentType    string
-	Body           io.Reader
-	Mode           string // "" | sync | async
-	Targets        []string
-	Subpath        string
-	MetadataJSON   string
-	IdempotencyKey string
-	ExpectedSHA256 string
-	SkipDedup      bool
+	Client           *db.Client
+	Filename         string
+	ContentType      string
+	Body             io.Reader
+	PreSpooledPath   string
+	PreSpooledSize   int64
+	PreSpooledSHA256 string
+	Mode             string // "" | sync | async
+	Targets          []string
+	Subpath          string
+	MetadataJSON     string
+	IdempotencyKey   string
+	ExpectedSHA256   string
+	SkipDedup        bool
 }
 
 // UploadResponse represents the result returned to the HTTP handler.
@@ -69,42 +75,175 @@ type Service struct {
 	enqueuer TaskEnqueuer
 	appCtx   context.Context
 	hookHTTP *http.Client
+
+	mu           sync.Mutex
+	runningTasks map[string]bool
+	wg           sync.WaitGroup
 }
 
 func NewService(appCtx context.Context, store *db.Store, cipher *crypto.Cipher, registry *storage.Registry) *Service {
-	return &Service{
-		store:    store,
-		cipher:   cipher,
-		registry: registry,
-		appCtx:   appCtx,
-		hookHTTP: &http.Client{Timeout: 15 * time.Second},
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		Control:   blockMetadataIPControl,
 	}
+	return &Service{
+		store:        store,
+		cipher:       cipher,
+		registry:     registry,
+		appCtx:       appCtx,
+		runningTasks: make(map[string]bool),
+		hookHTTP: &http.Client{
+			Timeout: 15 * time.Second,
+			Transport: &http.Transport{
+				DialContext: dialer.DialContext,
+			},
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
+}
+
+func blockMetadataIPControl(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+	// Block cloud metadata link-local range (169.254.0.0/16 and fe80::/10)
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("webhook target IP %s is blocked", ip.String())
+	}
+	return nil
+}
+
+// ValidateWebhookURL checks that an optional webhook URL uses http or https.
+func ValidateWebhookURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errors.New("webhook_url must be a valid http or https URL")
+	}
+	return nil
 }
 
 func (s *Service) SetEnqueuer(e TaskEnqueuer) {
 	s.enqueuer = e
 }
 
+// Wait blocks until all background sync-fallback and webhook goroutines finish.
+func (s *Service) Wait() {
+	s.wg.Wait()
+}
+
+func (s *Service) tryStartTask(taskID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runningTasks[taskID] {
+		return false
+	}
+	s.runningTasks[taskID] = true
+	return true
+}
+
+func (s *Service) finishTask(taskID string) {
+	s.mu.Lock()
+	delete(s.runningTasks, taskID)
+	s.mu.Unlock()
+}
+
+// SpoolStream streams an incoming reader to the spool directory while enforcing file and spool limits.
+func (s *Service) SpoolStream(ctx context.Context, client *db.Client, r io.Reader) (string, int64, string, error) {
+	settings, err := s.store.GetSystemSettings(ctx)
+	if err != nil {
+		return "", 0, "", err
+	}
+	if err := s.checkSpoolQuota(settings.SpoolDir, settings.MaxSpoolBytes); err != nil {
+		return "", 0, "", err
+	}
+	maxSize := settings.MaxFileSizeBytes
+	if client != nil && client.MaxFileSizeBytes > 0 {
+		maxSize = client.MaxFileSizeBytes
+	}
+	if maxSize <= 0 {
+		maxSize = 512 * 1024 * 1024
+	}
+	if err := os.MkdirAll(settings.SpoolDir, 0o750); err != nil {
+		return "", 0, "", fmt.Errorf("create spool dir: %w", err)
+	}
+	spoolPath := filepath.Join(settings.SpoolDir, crypto.NewULID()+".spool")
+	f, err := os.OpenFile(spoolPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("create spool file: %w", err)
+	}
+
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(r, maxSize+1))
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(spoolPath)
+		return "", 0, "", fmt.Errorf("read upload stream: %w", copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(spoolPath)
+		return "", 0, "", fmt.Errorf("close spool file: %w", closeErr)
+	}
+	if written > maxSize {
+		_ = os.Remove(spoolPath)
+		return "", 0, "", &HTTPError{
+			Status:  http.StatusRequestEntityTooLarge,
+			Code:    "file_too_large",
+			Message: fmt.Sprintf("file exceeds max allowed size of %d bytes", maxSize),
+		}
+	}
+	return spoolPath, written, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func (s *Service) checkSpoolQuota(spoolDir string, maxSpoolBytes int64) error {
+	if maxSpoolBytes <= 0 {
+		return nil
+	}
+	var used int64
+	_ = filepath.WalkDir(spoolDir, func(_ string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".spool") {
+			if info, iErr := d.Info(); iErr == nil {
+				used += info.Size()
+			}
+		}
+		return nil
+	})
+	if used >= maxSpoolBytes {
+		return &HTTPError{
+			Status:  http.StatusInsufficientStorage,
+			Code:    "spool_full",
+			Message: fmt.Sprintf("local spool quota reached (%d / %d bytes)", used, maxSpoolBytes),
+		}
+	}
+	return nil
+}
+
 // HandleUpload processes a client backup request end-to-end.
 func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadResponse, error) {
+	cleanupPreSpool := func() {
+		if req.PreSpooledPath != "" {
+			_ = os.Remove(req.PreSpooledPath)
+		}
+	}
+
 	if req.IdempotencyKey != "" {
 		existing, err := s.store.GetTaskByIdempotencyKey(ctx, req.Client.ID, req.IdempotencyKey)
 		if err == nil {
-			code := http.StatusOK
-			if existing.Status == "pending" || existing.Status == "running" {
-				code = http.StatusAccepted
-			} else if existing.Status == "partial_success" {
-				code = http.StatusMultiStatus
-			} else if existing.Status == "failed" {
-				code = http.StatusBadGateway
-			}
-			return &UploadResponse{
-				StatusCode:       code,
-				Task:             existing,
-				IdempotentReplay: true,
-			}, nil
+			cleanupPreSpool()
+			return idempotentResponse(existing), nil
 		}
 		if !errors.Is(err, db.ErrNotFound) {
+			cleanupPreSpool()
 			return nil, err
 		}
 	}
@@ -117,75 +256,53 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		mode = "async"
 	}
 	if mode != "sync" && mode != "async" {
+		cleanupPreSpool()
 		return nil, &HTTPError{Status: http.StatusBadRequest, Code: "invalid_mode", Message: "mode must be 'sync' or 'async'"}
 	}
 
-	// Validate MIME type if restricted
 	contentType := strings.TrimSpace(req.ContentType)
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 	if err := validateMimeType(req.Client.AllowedMimeTypesJSON, contentType); err != nil {
+		cleanupPreSpool()
 		return nil, err
 	}
 
-	// Resolve target upstreams for this client
 	targets, err := s.resolveTargets(ctx, req.Client.ID, req.Targets)
 	if err != nil {
+		cleanupPreSpool()
 		return nil, err
 	}
 
 	settings, err := s.store.GetSystemSettings(ctx)
 	if err != nil {
+		cleanupPreSpool()
 		return nil, err
-	}
-	maxSize := settings.MaxFileSizeBytes
-	if req.Client.MaxFileSizeBytes > 0 {
-		maxSize = req.Client.MaxFileSizeBytes
-	}
-	if maxSize <= 0 {
-		maxSize = 512 * 1024 * 1024
 	}
 
 	subpath, err := sanitizeSubpath(req.Subpath)
 	if err != nil {
+		cleanupPreSpool()
 		return nil, &HTTPError{Status: http.StatusBadRequest, Code: "invalid_path", Message: err.Error()}
+	}
+	clientPrefix, err := sanitizeSubpath(req.Client.PathPrefix)
+	if err != nil {
+		clientPrefix = ""
 	}
 	safeName := sanitizeFilename(req.Filename)
 	taskID := crypto.NewULID()
 
-	// Stream body to spool file while computing SHA-256
-	if err := os.MkdirAll(settings.SpoolDir, 0o750); err != nil {
-		return nil, fmt.Errorf("create spool dir: %w", err)
-	}
-	spoolPath := filepath.Join(settings.SpoolDir, taskID+".spool")
-	f, err := os.OpenFile(spoolPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
-	if err != nil {
-		return nil, fmt.Errorf("create spool file: %w", err)
-	}
-
-	hasher := sha256.New()
-	limited := io.LimitReader(req.Body, maxSize+1)
-	written, copyErr := io.Copy(io.MultiWriter(f, hasher), limited)
-	closeErr := f.Close()
-	if copyErr != nil {
-		_ = os.Remove(spoolPath)
-		return nil, fmt.Errorf("read upload stream: %w", copyErr)
-	}
-	if closeErr != nil {
-		_ = os.Remove(spoolPath)
-		return nil, fmt.Errorf("close spool file: %w", closeErr)
-	}
-	if written > maxSize {
-		_ = os.Remove(spoolPath)
-		return nil, &HTTPError{
-			Status:  http.StatusRequestEntityTooLarge,
-			Code:    "file_too_large",
-			Message: fmt.Sprintf("file exceeds max allowed size of %d bytes", maxSize),
+	spoolPath := req.PreSpooledPath
+	written := req.PreSpooledSize
+	shaHex := req.PreSpooledSHA256
+	if spoolPath == "" {
+		spoolPath, written, shaHex, err = s.SpoolStream(ctx, req.Client, req.Body)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	shaHex := hex.EncodeToString(hasher.Sum(nil))
 	if req.ExpectedSHA256 != "" && !strings.EqualFold(strings.TrimSpace(req.ExpectedSHA256), shaHex) {
 		_ = os.Remove(spoolPath)
 		return nil, &HTTPError{
@@ -195,7 +312,6 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		}
 	}
 
-	// Check SHA-256 deduplication for this client
 	var matchedByUpstream map[string]db.BackupTaskItem
 	if !req.SkipDedup {
 		matchedByUpstream, err = s.store.FindSucceededItemsByHash(ctx, req.Client.ID, shaHex)
@@ -223,11 +339,9 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 
 	items := make([]db.BackupTaskItem, 0, len(targets))
 	allDeduped := true
-	anyDeduped := false
 	for _, target := range targets {
-		remotePath := buildRemotePath(req.Client.PathPrefix, subpath, taskID, safeName, now)
+		remotePath := buildRemotePath(clientPrefix, subpath, taskID, safeName, now)
 		if matched, ok := matchedByUpstream[target.UpstreamID]; ok {
-			anyDeduped = true
 			fin := now
 			items = append(items, db.BackupTaskItem{
 				ID:              crypto.NewULID(),
@@ -285,6 +399,20 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		CreatedAt:        now,
 	}
 
+	createOrReplay := func() (*UploadResponse, error) {
+		err := s.store.CreateBackupTask(ctx, task, items)
+		if err == nil {
+			return nil, nil
+		}
+		_ = os.Remove(spoolPath)
+		if req.IdempotencyKey != "" && strings.Contains(strings.ToLower(err.Error()), "unique") {
+			if existing, gErr := s.store.GetTaskByIdempotencyKey(ctx, req.Client.ID, req.IdempotencyKey); gErr == nil {
+				return idempotentResponse(existing), nil
+			}
+		}
+		return nil, err
+	}
+
 	if allDeduped {
 		_ = os.Remove(spoolPath)
 		fin := now
@@ -293,10 +421,13 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		task.SpoolCleaned = true
 		task.StartedAt = &now
 		task.FinishedAt = &fin
-		if err := s.store.CreateBackupTask(ctx, task, items); err != nil {
-			return nil, err
+		if replay, err := createOrReplay(); err != nil || replay != nil {
+			return replay, err
 		}
 		task.Items = items
+		if task.WebhookStatus == "pending" {
+			s.spawnWebhook(task.ID)
+		}
 		return &UploadResponse{
 			StatusCode: http.StatusOK,
 			Task:       task,
@@ -304,9 +435,8 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 	}
 
 	if mode == "async" {
-		if err := s.store.CreateBackupTask(ctx, task, items); err != nil {
-			_ = os.Remove(spoolPath)
-			return nil, err
+		if replay, err := createOrReplay(); err != nil || replay != nil {
+			return replay, err
 		}
 		task.Items = items
 		if s.enqueuer != nil {
@@ -318,16 +448,14 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		}, nil
 	}
 
-	// Sync mode: persist as running and execute concurrently; if sync timeout expires,
-	// let the execution continue in background and return 202 Accepted.
+	// Sync mode: persist as running and execute concurrently; if sync timeout expires
+	// or client disconnects, continue in background and return 202 Accepted.
 	task.Status = "running"
 	task.StartedAt = &now
-	if err := s.store.CreateBackupTask(ctx, task, items); err != nil {
-		_ = os.Remove(spoolPath)
-		return nil, err
+	if replay, err := createOrReplay(); err != nil || replay != nil {
+		return replay, err
 	}
 	task.Items = items
-	_ = anyDeduped
 
 	syncTimeout := time.Duration(settings.SyncTimeoutSec) * time.Second
 	if syncTimeout <= 0 {
@@ -335,14 +463,19 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 	}
 
 	doneCh := make(chan struct{})
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		s.executeTask(s.appCtx, task.ID, true)
 		close(doneCh)
 	}()
 
+	timer := time.NewTimer(syncTimeout)
+	defer timer.Stop()
+
 	select {
 	case <-doneCh:
-		updated, err := s.store.GetBackupTask(ctx, task.ID)
+		updated, err := s.store.GetBackupTask(s.appCtx, task.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -359,8 +492,18 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 			StatusCode: code,
 			Task:       updated,
 		}, nil
-	case <-time.After(syncTimeout):
-		updated, err := s.store.GetBackupTask(ctx, task.ID)
+	case <-timer.C:
+		updated, err := s.store.GetBackupTask(s.appCtx, task.ID)
+		if err != nil {
+			updated = task
+		}
+		return &UploadResponse{
+			StatusCode:      http.StatusAccepted,
+			Task:            updated,
+			TimedOutToAsync: true,
+		}, nil
+	case <-ctx.Done():
+		updated, err := s.store.GetBackupTask(s.appCtx, task.ID)
 		if err != nil {
 			updated = task
 		}
@@ -372,12 +515,32 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 	}
 }
 
+func idempotentResponse(existing *db.BackupTask) *UploadResponse {
+	code := http.StatusOK
+	if existing.Status == "pending" || existing.Status == "running" {
+		code = http.StatusAccepted
+	} else if existing.Status == "partial_success" {
+		code = http.StatusMultiStatus
+	} else if existing.Status == "failed" {
+		code = http.StatusBadGateway
+	}
+	return &UploadResponse{
+		StatusCode:       code,
+		Task:             existing,
+		IdempotentReplay: true,
+	}
+}
+
 // ProcessAsyncTask executes pending/retryable items for an async task.
 func (s *Service) ProcessAsyncTask(ctx context.Context, taskID string) {
 	s.executeTask(ctx, taskID, false)
 }
 
 func (s *Service) executeTask(ctx context.Context, taskID string, isSyncInitial bool) {
+	if !s.tryStartTask(taskID) {
+		return
+	}
+	defer s.finishTask(taskID)
 	task, err := s.store.GetBackupTask(ctx, taskID)
 	if err != nil {
 		return
@@ -522,8 +685,18 @@ func (s *Service) finalizeTaskState(ctx context.Context, taskID string) {
 	}
 
 	if task.WebhookStatus == "pending" {
-		go s.dispatchWebhook(context.Background(), task.ID)
+		s.spawnWebhook(task.ID)
 	}
+}
+
+func (s *Service) spawnWebhook(taskID string) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		wCtx, cancel := context.WithTimeout(s.appCtx, 20*time.Second)
+		defer cancel()
+		s.dispatchWebhook(wCtx, taskID)
+	}()
 }
 
 func (s *Service) dispatchWebhook(ctx context.Context, taskID string) {
@@ -730,7 +903,14 @@ func validateMimeType(allowedJSON, actual string) error {
 }
 
 func sanitizeSubpath(raw string) (string, error) {
-	clean := strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
+	var stripped strings.Builder
+	for _, r := range strings.TrimSpace(raw) {
+		if r < 32 {
+			continue
+		}
+		stripped.WriteRune(r)
+	}
+	clean := strings.ReplaceAll(stripped.String(), "\\", "/")
 	clean = strings.Trim(clean, "/")
 	if clean == "" {
 		return "", nil

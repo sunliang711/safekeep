@@ -57,10 +57,19 @@ func (p *WorkerPool) Start(ctx context.Context) {
 		go func(workerID int) {
 			defer p.wg.Done()
 			for {
+				if ctx.Err() != nil {
+					return
+				}
 				select {
 				case <-ctx.Done():
 					return
 				case taskID := <-dispatchCh:
+					if ctx.Err() != nil {
+						p.mu.Lock()
+						delete(p.inFlight, taskID)
+						p.mu.Unlock()
+						return
+					}
 					p.backupSvc.ProcessAsyncTask(ctx, taskID)
 					p.mu.Lock()
 					delete(p.inFlight, taskID)

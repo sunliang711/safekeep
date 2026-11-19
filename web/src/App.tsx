@@ -29,6 +29,8 @@ export function App() {
   const [tab, setTab] = useState<NavTab>(initialTab())
 
   useEffect(() => {
+    const onPopState = () => setTab(initialTab())
+    window.addEventListener('popstate', onPopState)
     ;(async () => {
       try {
         const st = await api.setupStatus()
@@ -45,6 +47,7 @@ export function App() {
         setBooting(false)
       }
     })()
+    return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
   const navigate = (next: NavTab) => {

@@ -7,28 +7,49 @@ import type { AuditLog } from '../types'
 export const AuditPage: React.FC = () => {
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const limit = 50
   const [actorType, setActorType] = useState('')
   const [status, setStatus] = useState('')
   const [action, setAction] = useState('')
   const [q, setQ] = useState('')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const [pageErr, setPageErr] = useState('')
   const [detail, setDetail] = useState<AuditLog | null>(null)
 
-  const load = async () => {
-    const params: Record<string, string> = { limit: '80' }
+  const buildParams = (includePage: boolean, targetOffset = offset) => {
+    const params: Record<string, string> = {}
+    if (includePage) {
+      params.limit = String(limit)
+      params.offset = String(targetOffset)
+    }
     if (actorType) params.actor_type = actorType
     if (status) params.status = status
     if (action) params.action = action
     if (q) params.q = q
-    const res = await api.listAuditLogs(params)
-    setLogs(res.items || [])
-    setTotal(res.total || 0)
+    if (fromDate) params.from = new Date(fromDate).toISOString()
+    if (toDate) params.to = new Date(toDate).toISOString()
+    return params
+  }
+
+  const load = async (targetOffset = offset) => {
+    setPageErr('')
+    try {
+      const res = await api.listAuditLogs(buildParams(true, targetOffset))
+      setLogs(res.items || [])
+      setTotal(res.total || 0)
+    } catch (err: any) {
+      setPageErr(err.message || '加载审计日志失败')
+    }
   }
 
   useEffect(() => {
-    load()
+    setOffset(0)
+    load(0)
   }, [actorType, status])
 
-  const exportQuery = new URLSearchParams({ actor_type: actorType, status, action, q }).toString()
+  const exportQuery = new URLSearchParams(buildParams(false)).toString()
 
   return (
     <div className="space-y-5">
@@ -59,7 +80,7 @@ export const AuditPage: React.FC = () => {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && load()}
+            onKeyDown={(e) => { if (e.key === 'Enter') { setOffset(0); load(0) } }}
             placeholder="搜索操作者 / 资源 ID / 详情..."
             className="w-full text-sm focus:outline-none"
           />
@@ -67,7 +88,7 @@ export const AuditPage: React.FC = () => {
         <input
           value={action}
           onChange={(e) => setAction(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && load()}
+          onKeyDown={(e) => { if (e.key === 'Enter') { setOffset(0); load(0) } }}
           placeholder="动作前缀 (如 backup.upload)"
           className="px-3 py-1.5 border rounded-lg text-sm"
         />
@@ -82,10 +103,14 @@ export const AuditPage: React.FC = () => {
           <option value="success">success</option>
           <option value="failure">failure</option>
         </select>
-        <button onClick={load} className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-sm">
+        <input type="datetime-local" value={fromDate} onChange={(e) => setFromDate(e.target.value)} title="开始时间" className="px-2.5 py-1.5 border rounded-lg text-xs" />
+        <input type="datetime-local" value={toDate} onChange={(e) => setToDate(e.target.value)} title="结束时间" className="px-2.5 py-1.5 border rounded-lg text-xs" />
+        <button onClick={() => { setOffset(0); load(0) }} className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-sm">
           查询
         </button>
       </div>
+
+      {pageErr && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-sm">{pageErr}</div>}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">
@@ -124,6 +149,26 @@ export const AuditPage: React.FC = () => {
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between text-xs text-slate-500">
+        <span>第 {Math.floor(offset / limit) + 1} 页 · 共 {total} 条</span>
+        <div className="flex gap-2">
+          <button
+            disabled={offset === 0}
+            onClick={() => { const next = Math.max(0, offset - limit); setOffset(next); load(next) }}
+            className="px-3 py-1.5 bg-white border rounded-lg disabled:opacity-40"
+          >
+            上一页
+          </button>
+          <button
+            disabled={offset + limit >= total}
+            onClick={() => { const next = offset + limit; setOffset(next); load(next) }}
+            className="px-3 py-1.5 bg-white border rounded-lg disabled:opacity-40"
+          >
+            下一页
+          </button>
+        </div>
       </div>
 
       {detail && (

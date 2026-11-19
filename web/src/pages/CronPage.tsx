@@ -15,8 +15,12 @@ export const CronPage: React.FC = () => {
   const [msg, setMsg] = useState('')
 
   const load = async () => {
-    const res = await api.listCronJobs()
-    setJobs(res.items || [])
+    try {
+      const res = await api.listCronJobs()
+      setJobs(res.items || [])
+    } catch (err: any) {
+      setMsg(`加载定时任务失败: ${err.message}`)
+    }
   }
 
   useEffect(() => {

@@ -12,9 +12,11 @@ interface ClientForm {
   default_mode: 'sync' | 'async'
   path_prefix: string
   max_file_size_mb: number
+  allowed_mime_types: string
   rate_limit_rpm: number
   webhook_url: string
   webhook_secret: string
+  expires_at: string
   upstreams: { upstream_id: string; enabled: boolean; is_default: boolean; priority: number }[]
 }
 
@@ -26,13 +28,17 @@ export const ClientsPage: React.FC = () => {
   const [form, setForm] = useState<ClientForm | null>(null)
   const [revealedKey, setRevealedKey] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [pageErr, setPageErr] = useState('')
 
   const load = async () => {
     setLoading(true)
+    setPageErr('')
     try {
       const [cRes, uRes] = await Promise.all([api.listClients(), api.listUpstreams()])
       setClients(cRes.items || [])
       setUpstreams(uRes.items || [])
+    } catch (err: any) {
+      setPageErr(err.message || '加载客户列表失败')
     } finally {
       setLoading(false)
     }
@@ -43,6 +49,7 @@ export const ClientsPage: React.FC = () => {
   }, [])
 
   const openNew = () => {
+    setError('')
     setForm({
       name: '',
       description: '',
@@ -50,9 +57,11 @@ export const ClientsPage: React.FC = () => {
       default_mode: 'async',
       path_prefix: '',
       max_file_size_mb: 0,
+      allowed_mime_types: '',
       rate_limit_rpm: 0,
       webhook_url: '',
       webhook_secret: '',
+      expires_at: '',
       upstreams: upstreams.map((u, idx) => ({
         upstream_id: u.id,
         enabled: true,
@@ -64,6 +73,7 @@ export const ClientsPage: React.FC = () => {
   }
 
   const openEdit = (c: Client) => {
+    setError('')
     const boundMap = new Map(c.upstreams.map((u) => [u.upstream_id, u]))
     setForm({
       id: c.id,
@@ -73,9 +83,11 @@ export const ClientsPage: React.FC = () => {
       default_mode: c.default_mode,
       path_prefix: c.path_prefix,
       max_file_size_mb: c.max_file_size_bytes > 0 ? Math.round(c.max_file_size_bytes / (1024 * 1024)) : 0,
+      allowed_mime_types: (c.allowed_mime_types || []).join(', '),
       rate_limit_rpm: c.rate_limit_rpm,
       webhook_url: c.webhook_url,
       webhook_secret: '',
+      expires_at: c.expires_at ? new Date(c.expires_at).toISOString().slice(0, 16) : '',
       upstreams: upstreams.map((u, idx) => {
         const b = boundMap.get(u.id)
         return {
@@ -97,6 +109,11 @@ export const ClientsPage: React.FC = () => {
       .filter((u) => u.enabled)
       .map((u) => ({ upstream_id: u.upstream_id, is_default: u.is_default, priority: Number(u.priority) }))
 
+    const allowedMimes = form.allowed_mime_types
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+
     const payload: any = {
       name: form.name,
       description: form.description,
@@ -104,8 +121,10 @@ export const ClientsPage: React.FC = () => {
       default_mode: form.default_mode,
       path_prefix: form.path_prefix,
       max_file_size_bytes: form.max_file_size_mb > 0 ? form.max_file_size_mb * 1024 * 1024 : 0,
+      allowed_mime_types: allowedMimes,
       rate_limit_rpm: Number(form.rate_limit_rpm),
       webhook_url: form.webhook_url,
+      expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : null,
       upstreams: selectedUpstreams,
     }
     if (!form.id || form.webhook_secret !== '') {
@@ -157,6 +176,8 @@ export const ClientsPage: React.FC = () => {
           <Plus className="w-4 h-4" /> 创建客户 & Key
         </button>
       </div>
+
+      {pageErr && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-sm">{pageErr}</div>}
 
       {loading ? (
         <div className="text-sm text-slate-500">加载中...</div>
@@ -276,6 +297,14 @@ export const ClientsPage: React.FC = () => {
                 <div>
                   <label className="block text-xs text-slate-600 mb-1">Webhook 签名密钥 {form.id ? '（留空不变）' : ''}</label>
                   <input type="password" value={form.webhook_secret} onChange={(e) => setForm({ ...form, webhook_secret: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">允许的 MIME 类型（逗号分隔，空=不限）</label>
+                  <input value={form.allowed_mime_types} onChange={(e) => setForm({ ...form, allowed_mime_types: e.target.value })} placeholder="image/*,application/pdf" className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">API Key 过期时间（可选）</label>
+                  <input type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
               </div>
 

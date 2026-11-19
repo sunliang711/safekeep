@@ -9,6 +9,8 @@ export const SettingsMigrationPage: React.FC = () => {
   const [admins, setAdmins] = useState<Admin[]>([])
   const [newAdminUser, setNewAdminUser] = useState('')
   const [newAdminPass, setNewAdminPass] = useState('')
+  const [oldPwd, setOldPwd] = useState('')
+  const [newPwd, setNewPwd] = useState('')
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
@@ -29,9 +31,27 @@ export const SettingsMigrationPage: React.FC = () => {
   const [inspectRes, setInspectRes] = useState<InspectSummary | null>(null)
 
   const load = async () => {
-    const [s, a] = await Promise.all([api.getSettings(), api.listAdmins()])
-    setSettings(s)
-    setAdmins(a.items || [])
+    try {
+      const [s, a] = await Promise.all([api.getSettings(), api.listAdmins()])
+      setSettings(s)
+      setAdmins(a.items || [])
+    } catch (e: any) {
+      setErr(e.message || '加载设置失败')
+    }
+  }
+
+  const handleChangeOwnPassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setMsg('')
+    setErr('')
+    try {
+      await api.changePassword(oldPwd, newPwd)
+      setOldPwd('')
+      setNewPwd('')
+      setMsg('当前管理员密码已修改')
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   useEffect(() => {
@@ -235,11 +255,16 @@ export const SettingsMigrationPage: React.FC = () => {
               <div>
                 上游 {inspectRes.counts.upstreams} · 客户 {inspectRes.counts.clients} · 定时任务 {inspectRes.counts.cron_jobs} · 历史任务 {inspectRes.counts.backup_tasks} · 审计日志 {inspectRes.counts.audit_logs}
               </div>
-              {(inspectRes.upstream_conflicts?.length || inspectRes.client_conflicts?.length) ? (
+              {(inspectRes.upstream_conflicts?.length || inspectRes.client_conflicts?.length || inspectRes.admin_conflicts?.length) ? (
                 <div className="text-amber-700 flex items-start gap-1">
                   <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
                   <span>
-                    检测到冲突：{inspectRes.upstream_conflicts?.join(', ')} {inspectRes.client_conflicts?.join(', ')}
+                    检测到冲突：
+                    {[
+                      inspectRes.upstream_conflicts?.length ? `上游(${inspectRes.upstream_conflicts.join(', ')})` : '',
+                      inspectRes.client_conflicts?.length ? `客户(${inspectRes.client_conflicts.join(', ')})` : '',
+                      inspectRes.admin_conflicts?.length ? `管理员(${inspectRes.admin_conflicts.join(', ')})` : '',
+                    ].filter(Boolean).join(' · ')}
                   </span>
                 </div>
               ) : (
@@ -266,6 +291,10 @@ export const SettingsMigrationPage: React.FC = () => {
             <div>
               <label className="block text-xs text-slate-600 mb-1">默认单文件上限（字节）</label>
               <input type="number" value={settings.max_file_size_bytes} onChange={(e) => setSettings({ ...settings, max_file_size_bytes: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">本地缓冲总容量上限（字节，0=不限）</label>
+              <input type="number" min={0} value={settings.max_spool_bytes} onChange={(e) => setSettings({ ...settings, max_spool_bytes: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
             </div>
             <div>
               <label className="block text-xs text-slate-600 mb-1">同步模式超时（秒，超时转后台）</label>
@@ -303,8 +332,27 @@ export const SettingsMigrationPage: React.FC = () => {
                   <StatusBadge value={a.is_active ? 'enabled' : 'disabled'} label={a.is_active ? '启用' : '禁用'} />
                   <button
                     onClick={async () => {
-                      await api.updateAdmin(a.id, { is_active: !a.is_active })
-                      await load()
+                      const pwd = prompt(`为管理员 "${a.username}" 输入新密码（至少 8 位）：`)
+                      if (!pwd) return
+                      try {
+                        await api.updateAdmin(a.id, { password: pwd })
+                        setMsg(`已重置管理员 "${a.username}" 密码`)
+                      } catch (e: any) {
+                        setErr(e.message)
+                      }
+                    }}
+                    className="text-xs text-slate-600 hover:underline"
+                  >
+                    重置密码
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await api.updateAdmin(a.id, { is_active: !a.is_active })
+                        await load()
+                      } catch (e: any) {
+                        setErr(e.message)
+                      }
                     }}
                     className="text-xs text-indigo-600 hover:underline"
                   >
@@ -314,12 +362,20 @@ export const SettingsMigrationPage: React.FC = () => {
               </div>
             ))}
           </div>
-          <form onSubmit={handleCreateAdmin} className="space-y-2.5 text-sm border rounded-xl p-4">
-            <div className="font-medium text-slate-800">新增管理员</div>
-            <input required minLength={3} placeholder="用户名" value={newAdminUser} onChange={(e) => setNewAdminUser(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg" />
-            <input type="password" required minLength={8} placeholder="密码（>=8位）" value={newAdminPass} onChange={(e) => setNewAdminPass(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg" />
-            <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium">添加管理员</button>
-          </form>
+          <div className="space-y-4">
+            <form onSubmit={handleCreateAdmin} className="space-y-2.5 text-sm border rounded-xl p-4">
+              <div className="font-medium text-slate-800">新增管理员</div>
+              <input required minLength={3} placeholder="用户名" value={newAdminUser} onChange={(e) => setNewAdminUser(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg" />
+              <input type="password" required minLength={8} placeholder="密码（>=8位）" value={newAdminPass} onChange={(e) => setNewAdminPass(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg" />
+              <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium">添加管理员</button>
+            </form>
+            <form onSubmit={handleChangeOwnPassword} className="space-y-2.5 text-sm border rounded-xl p-4">
+              <div className="font-medium text-slate-800">修改当前登录密码</div>
+              <input type="password" required placeholder="当前密码" value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg" />
+              <input type="password" required minLength={8} placeholder="新密码（>=8位）" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg" />
+              <button type="submit" className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-xs font-medium">更新密码</button>
+            </form>
+          </div>
         </div>
       </div>
     </div>

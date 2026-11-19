@@ -7,9 +7,12 @@ import type { BackupTask } from '../types'
 export const TasksPage: React.FC = () => {
   const [tasks, setTasks] = useState<BackupTask[]>([])
   const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const limit = 20
   const [status, setStatus] = useState('')
   const [mode, setMode] = useState('')
   const [q, setQ] = useState('')
+  const [pageErr, setPageErr] = useState('')
   const [selected, setSelected] = useState<BackupTask | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [testApiKey, setTestApiKey] = useState('')
@@ -19,18 +22,24 @@ export const TasksPage: React.FC = () => {
   const [testFile, setTestFile] = useState<File | null>(null)
   const [testMsg, setTestMsg] = useState('')
 
-  const load = async () => {
-    const params: Record<string, string> = { limit: '50' }
-    if (status) params.status = status
-    if (mode) params.mode = mode
-    if (q) params.q = q
-    const res = await api.listTasks(params)
-    setTasks(res.items || [])
-    setTotal(res.total || 0)
+  const load = async (targetOffset = offset) => {
+    setPageErr('')
+    try {
+      const params: Record<string, string> = { limit: String(limit), offset: String(targetOffset) }
+      if (status) params.status = status
+      if (mode) params.mode = mode
+      if (q) params.q = q
+      const res = await api.listTasks(params)
+      setTasks(res.items || [])
+      setTotal(res.total || 0)
+    } catch (err: any) {
+      setPageErr(err.message || '加载任务失败')
+    }
   }
 
   useEffect(() => {
-    load()
+    setOffset(0)
+    load(0)
   }, [status, mode])
 
   const handleRetry = async (id: string) => {
@@ -85,7 +94,7 @@ export const TasksPage: React.FC = () => {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && load()}
+            onKeyDown={(e) => { if (e.key === 'Enter') { setOffset(0); load(0) } }}
             placeholder="搜索文件名 / Task ID / SHA-256..."
             className="w-full text-sm focus:outline-none"
           />
@@ -103,10 +112,12 @@ export const TasksPage: React.FC = () => {
           <option value="sync">sync</option>
           <option value="async">async</option>
         </select>
-        <button onClick={load} className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-sm">
+        <button onClick={() => { setOffset(0); load(0) }} className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-sm">
           查询
         </button>
       </div>
+
+      {pageErr && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-sm">{pageErr}</div>}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">
@@ -171,6 +182,26 @@ export const TasksPage: React.FC = () => {
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between text-xs text-slate-500">
+        <span>第 {Math.floor(offset / limit) + 1} 页 · 共 {total} 条</span>
+        <div className="flex gap-2">
+          <button
+            disabled={offset === 0}
+            onClick={() => { const next = Math.max(0, offset - limit); setOffset(next); load(next) }}
+            className="px-3 py-1.5 bg-white border rounded-lg disabled:opacity-40"
+          >
+            上一页
+          </button>
+          <button
+            disabled={offset + limit >= total}
+            onClick={() => { const next = offset + limit; setOffset(next); load(next) }}
+            className="px-3 py-1.5 bg-white border rounded-lg disabled:opacity-40"
+          >
+            下一页
+          </button>
+        </div>
       </div>
 
       {selected && (

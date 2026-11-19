@@ -280,6 +280,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 }
 
 // FindRunnableTaskIDs finds tasks with pending items ready to execute or retry.
+// Tasks currently in 'running' state are excluded to avoid racing with active sync/worker execution.
 func (s *Store) FindRunnableTaskIDs(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 20
@@ -289,7 +290,7 @@ func (s *Store) FindRunnableTaskIDs(ctx context.Context, limit int) ([]string, e
 		`SELECT DISTINCT t.id
 		 FROM backup_tasks t
 		 JOIN backup_task_items i ON i.task_id = t.id
-		 WHERE t.status IN ('pending', 'running', 'partial_success')
+		 WHERE t.status IN ('pending', 'partial_success')
 		   AND i.status = 'pending'
 		   AND (i.next_retry_at IS NULL OR i.next_retry_at <= ?)
 		 ORDER BY t.created_at ASC
@@ -360,6 +361,69 @@ func (s *Store) ListActiveSpoolPaths(ctx context.Context) (map[string]struct{}, 
 		set[p] = struct{}{}
 	}
 	return set, rows.Err()
+}
+
+// ListExpiredFailedTaskSpools returns task IDs and spool paths for permanently failed tasks older than cutoff.
+func (s *Store) ListExpiredFailedTaskSpools(ctx context.Context, cutoff time.Time) ([]BackupTask, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, spool_path FROM backup_tasks
+		 WHERE status = 'failed' AND spool_cleaned = 0 AND spool_path != ''
+		   AND COALESCE(finished_at, created_at) < ?`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []BackupTask
+	for rows.Next() {
+		var t BackupTask
+		if err := rows.Scan(&t.ID, &t.SpoolPath); err != nil {
+			return nil, err
+		}
+		list = append(list, t)
+	}
+	return list, rows.Err()
+}
+
+// ExportAllBackupTasks returns all backup tasks and their items without pagination clamping.
+func (s *Store) ExportAllBackupTasks(ctx context.Context) ([]BackupTask, []BackupTaskItem, error) {
+	const pageSize = 200
+	var allTasks []BackupTask
+	var allItems []BackupTaskItem
+	for offset := 0; ; offset += pageSize {
+		batch, _, err := s.ListBackupTasks(ctx, TaskFilter{Limit: pageSize, Offset: offset})
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, t := range batch {
+			items := t.Items
+			t.Items = nil
+			allTasks = append(allTasks, t)
+			allItems = append(allItems, items...)
+		}
+		if len(batch) < pageSize {
+			break
+		}
+	}
+	return allTasks, allItems, nil
+}
+
+// ExportAllAuditLogs returns all audit logs matching the filter without pagination clamping.
+func (s *Store) ExportAllAuditLogs(ctx context.Context, f AuditFilter) ([]AuditLog, error) {
+	const pageSize = 500
+	var all []AuditLog
+	for offset := 0; ; offset += pageSize {
+		f.Limit = pageSize
+		f.Offset = offset
+		batch, _, err := s.ListAuditLogs(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if len(batch) < pageSize {
+			break
+		}
+	}
+	return all, nil
 }
 
 func scanBackupTask(row rowScanner) (*BackupTask, error) {

@@ -268,21 +268,17 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 
 	// 6. Optional Backup Tasks & Items
 	if opts.IncludeTasks {
-		tasks, _, err := s.store.ListBackupTasks(ctx, db.TaskFilter{Limit: 100000})
+		tasks, items, err := s.store.ExportAllBackupTasks(ctx)
 		if err != nil {
 			return nil, err
 		}
-		for _, t := range tasks {
-			items := t.Items
-			t.Items = nil
-			data.BackupTasks = append(data.BackupTasks, t)
-			data.BackupItems = append(data.BackupItems, items...)
-		}
+		data.BackupTasks = tasks
+		data.BackupItems = items
 	}
 
 	// 7. Optional Audit Logs
 	if opts.IncludeAuditLogs {
-		logs, _, err := s.store.ListAuditLogs(ctx, db.AuditFilter{Limit: 100000})
+		logs, err := s.store.ExportAllAuditLogs(ctx, db.AuditFilter{})
 		if err != nil {
 			return nil, err
 		}
@@ -319,22 +315,36 @@ func decodeBundle(encrypted []byte, passphrase string) (*Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	var b Bundle
-	if err := json.Unmarshal(raw, &b); err != nil {
+	var envelope struct {
+		FormatVersion int             `json:"format_version"`
+		ExportedAt    time.Time       `json:"exported_at"`
+		Includes      BundleInclude   `json:"includes"`
+		Checksum      string          `json:"checksum_sha256"`
+		Data          json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return nil, fmt.Errorf("parse bundle json: %w", err)
 	}
-	if b.FormatVersion != FormatVersion {
-		return nil, fmt.Errorf("unsupported migration format_version %d", b.FormatVersion)
+	if envelope.FormatVersion != FormatVersion {
+		return nil, fmt.Errorf("unsupported migration format_version %d", envelope.FormatVersion)
 	}
-	dataBytes, err := json.Marshal(b.Data)
-	if err != nil {
-		return nil, err
+	if envelope.Checksum != "" {
+		sum := sha256.Sum256(envelope.Data)
+		if hex.EncodeToString(sum[:]) != envelope.Checksum {
+			return nil, fmt.Errorf("bundle checksum verification failed")
+		}
 	}
-	sum := sha256.Sum256(dataBytes)
-	if b.Checksum != "" && hex.EncodeToString(sum[:]) != b.Checksum {
-		return nil, fmt.Errorf("bundle checksum verification failed")
+	var data BundleData
+	if err := json.Unmarshal(envelope.Data, &data); err != nil {
+		return nil, fmt.Errorf("parse bundle data: %w", err)
 	}
-	return &b, nil
+	return &Bundle{
+		FormatVersion: envelope.FormatVersion,
+		ExportedAt:    envelope.ExportedAt,
+		Includes:      envelope.Includes,
+		Checksum:      envelope.Checksum,
+		Data:          data,
+	}, nil
 }
 
 // Inspect decrypts a bundle without modifying the database and reports counts & conflicts.
@@ -454,6 +464,9 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 	}
 
 	counts := &BundleCounts{}
+	upstreamIDMap := make(map[string]string, len(b.Data.Upstreams))
+	clientIDMap := make(map[string]string, len(b.Data.Clients))
+	skippedClients := make(map[string]bool)
 
 	// 1. System Settings
 	for _, st := range b.Data.SystemSettings {
@@ -476,7 +489,7 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		counts.SystemSettings++
 	}
 
-	// 2. Upstreams (re-encrypt with target master key)
+	// 2. Upstreams (re-encrypt with target master key; avoid DELETE to preserve foreign keys)
 	for _, u := range b.Data.Upstreams {
 		cfgEnc, err := s.cipher.EncryptString(u.ConfigPlainJSON)
 		if err != nil {
@@ -491,16 +504,26 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 			return nil, err
 		}
 
+		targetID := u.ID
+		var existingByName string
+		_ = tx.QueryRowContext(ctx, `SELECT id FROM upstreams WHERE name = ?`, u.Name).Scan(&existingByName)
+		var existingByID string
+		_ = tx.QueryRowContext(ctx, `SELECT id FROM upstreams WHERE id = ?`, u.ID).Scan(&existingByID)
+
 		if mode == "merge" && conflict == "skip" {
-			var exists int
-			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstreams WHERE id = ? OR name = ?`, u.ID, u.Name).Scan(&exists)
-			if exists > 0 {
+			if existingByID != "" {
+				upstreamIDMap[u.ID] = existingByID
+				continue
+			}
+			if existingByName != "" {
+				upstreamIDMap[u.ID] = existingByName
 				continue
 			}
 		}
-		if mode == "merge" && conflict == "overwrite" {
-			_, _ = tx.ExecContext(ctx, `DELETE FROM upstreams WHERE name = ? AND id != ?`, u.Name, u.ID)
+		if existingByID == "" && existingByName != "" {
+			targetID = existingByName
 		}
+		upstreamIDMap[u.ID] = targetID
 
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO upstreams(
@@ -517,7 +540,7 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 				proxy_username_encrypted=excluded.proxy_username_encrypted,
 				proxy_password_encrypted=excluded.proxy_password_encrypted,
 				updated_at=excluded.updated_at`,
-			u.ID, u.Name, u.Type, boolInt(u.Enabled), cfgEnc,
+			targetID, u.Name, u.Type, boolInt(u.Enabled), cfgEnc,
 			boolInt(u.ProxyEnabled), u.ProxyType, u.ProxyHost, u.ProxyPort,
 			pUserEnc, pPassEnc,
 			u.LastTestStatus, u.LastTestError, u.LastTestedAt, u.CreatedAt, u.UpdatedAt,
@@ -527,22 +550,43 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		counts.Upstreams++
 	}
 
-	// 3. Clients (re-encrypt webhook secret, keep key_hash intact)
+	// 3. Clients (re-encrypt webhook secret, keep key_hash intact, update in-place on conflict to prevent CASCADE delete of tasks)
 	for _, c := range b.Data.Clients {
 		whEnc, err := s.cipher.EncryptString(c.WebhookSecretPlain)
 		if err != nil {
 			return nil, err
 		}
+		targetID := c.ID
+		var existingByID, existingByName, existingByHash string
+		_ = tx.QueryRowContext(ctx, `SELECT id FROM clients WHERE id = ?`, c.ID).Scan(&existingByID)
+		_ = tx.QueryRowContext(ctx, `SELECT id FROM clients WHERE name = ?`, c.Name).Scan(&existingByName)
+		_ = tx.QueryRowContext(ctx, `SELECT id FROM clients WHERE key_hash = ?`, c.KeyHash).Scan(&existingByHash)
+
 		if mode == "merge" && conflict == "skip" {
-			var exists int
-			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients WHERE id = ? OR name = ? OR key_hash = ?`, c.ID, c.Name, c.KeyHash).Scan(&exists)
-			if exists > 0 {
+			if existingByID != "" {
+				clientIDMap[c.ID] = existingByID
+				skippedClients[c.ID] = true
+				continue
+			}
+			if existingByName != "" {
+				clientIDMap[c.ID] = existingByName
+				skippedClients[c.ID] = true
+				continue
+			}
+			if existingByHash != "" {
+				clientIDMap[c.ID] = existingByHash
+				skippedClients[c.ID] = true
 				continue
 			}
 		}
-		if mode == "merge" && conflict == "overwrite" {
-			_, _ = tx.ExecContext(ctx, `DELETE FROM clients WHERE (name = ? OR key_hash = ?) AND id != ?`, c.Name, c.KeyHash, c.ID)
+		if existingByID == "" {
+			if existingByName != "" {
+				targetID = existingByName
+			} else if existingByHash != "" {
+				targetID = existingByHash
+			}
 		}
+		clientIDMap[c.ID] = targetID
 
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO clients(
@@ -557,7 +601,7 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 				allowed_mime_types_json=excluded.allowed_mime_types_json, rate_limit_rpm=excluded.rate_limit_rpm,
 				webhook_url=excluded.webhook_url, webhook_secret_encrypted=excluded.webhook_secret_encrypted,
 				expires_at=excluded.expires_at, updated_at=excluded.updated_at`,
-			c.ID, c.Name, c.Description, c.KeyPrefix, c.KeyHash, boolInt(c.Enabled), c.DefaultMode,
+			targetID, c.Name, c.Description, c.KeyPrefix, c.KeyHash, boolInt(c.Enabled), c.DefaultMode,
 			c.PathPrefix, c.MaxFileSizeBytes, c.AllowedMimeTypesJSON, c.RateLimitRPM,
 			c.WebhookURL, whEnc, c.ExpiresAt, c.LastUsedAt, c.CreatedAt, c.UpdatedAt,
 		); err != nil {
@@ -568,21 +612,46 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 
 	// 4. ClientUpstreams
 	for _, cu := range b.Data.ClientUpstreams {
+		if mode == "merge" && conflict == "skip" && skippedClients[cu.ClientID] {
+			continue
+		}
+		cID := cu.ClientID
+		if mapped, ok := clientIDMap[cID]; ok {
+			cID = mapped
+		}
+		uID := cu.UpstreamID
+		if mapped, ok := upstreamIDMap[uID]; ok {
+			uID = mapped
+		}
+
 		var cExists, uExists int
-		_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients WHERE id = ?`, cu.ClientID).Scan(&cExists)
-		_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstreams WHERE id = ?`, cu.UpstreamID).Scan(&uExists)
+		_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients WHERE id = ?`, cID).Scan(&cExists)
+		_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstreams WHERE id = ?`, uID).Scan(&uExists)
 		if cExists == 0 || uExists == 0 {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO client_upstreams(client_id, upstream_id, is_default, priority)
-			 VALUES (?, ?, ?, ?)
-			 ON CONFLICT(client_id, upstream_id) DO UPDATE SET is_default=excluded.is_default, priority=excluded.priority`,
-			cu.ClientID, cu.UpstreamID, boolInt(cu.IsDefault), cu.Priority,
-		); err != nil {
-			return nil, err
+		if mode == "merge" && conflict == "skip" {
+			res, err := tx.ExecContext(ctx,
+				`INSERT OR IGNORE INTO client_upstreams(client_id, upstream_id, is_default, priority) VALUES (?, ?, ?, ?)`,
+				cID, uID, boolInt(cu.IsDefault), cu.Priority,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				counts.ClientUpstreams++
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO client_upstreams(client_id, upstream_id, is_default, priority)
+				 VALUES (?, ?, ?, ?)
+				 ON CONFLICT(client_id, upstream_id) DO UPDATE SET is_default=excluded.is_default, priority=excluded.priority`,
+				cID, uID, boolInt(cu.IsDefault), cu.Priority,
+			); err != nil {
+				return nil, err
+			}
+			counts.ClientUpstreams++
 		}
-		counts.ClientUpstreams++
 	}
 
 	// 5. CronJobs (update config by job_key)
@@ -599,21 +668,25 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		counts.CronJobs++
 	}
 
-	// 6. Optional Admins
+	// 6. Optional Admins (handle username uniqueness safely)
 	if opts.IncludeAdmins && b.Includes.Admins {
 		for _, a := range b.Data.Admins {
-			if mode == "merge" && conflict == "skip" {
-				var exists int
-				_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins WHERE id = ? OR username = ?`, a.ID, a.Username).Scan(&exists)
-				if exists > 0 {
-					continue
-				}
+			var existingByID, existingByUser string
+			_ = tx.QueryRowContext(ctx, `SELECT id FROM admins WHERE id = ?`, a.ID).Scan(&existingByID)
+			_ = tx.QueryRowContext(ctx, `SELECT id FROM admins WHERE username = ?`, a.Username).Scan(&existingByUser)
+
+			if mode == "merge" && conflict == "skip" && (existingByID != "" || existingByUser != "") {
+				continue
+			}
+			targetID := a.ID
+			if existingByID == "" && existingByUser != "" {
+				targetID = existingByUser
 			}
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO admins(id, username, password_hash, is_active, last_login_at, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash, is_active=excluded.is_active, updated_at=excluded.updated_at`,
-				a.ID, a.Username, a.PasswordHash, boolInt(a.IsActive), a.LastLoginAt, a.CreatedAt, a.UpdatedAt,
+				targetID, a.Username, a.PasswordHash, boolInt(a.IsActive), a.LastLoginAt, a.CreatedAt, a.UpdatedAt,
 			); err != nil {
 				return nil, err
 			}
@@ -624,12 +697,16 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 	// 7. Optional Backup Tasks & Items
 	if opts.IncludeTasks && b.Includes.Tasks {
 		for _, t := range b.Data.BackupTasks {
+			cID := t.ClientID
+			if mapped, ok := clientIDMap[cID]; ok {
+				cID = mapped
+			}
 			var cExists int
-			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients WHERE id = ?`, t.ClientID).Scan(&cExists)
+			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients WHERE id = ?`, cID).Scan(&cExists)
 			if cExists == 0 {
 				continue
 			}
-			if _, err := tx.ExecContext(ctx,
+			res, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO backup_tasks(
 					id, client_id, idempotency_key, mode, status,
 					original_filename, content_type, file_size, sha256,
@@ -637,21 +714,28 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 					deduplicated, webhook_status, error_summary,
 					created_at, started_at, finished_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				t.ID, t.ClientID, t.IdempotencyKey, t.Mode, t.Status,
+				t.ID, cID, t.IdempotencyKey, t.Mode, t.Status,
 				t.OriginalFilename, t.ContentType, t.FileSize, t.SHA256,
 				t.CustomSubpath, t.MetadataJSON,
 				boolInt(t.Deduplicated), t.WebhookStatus, t.ErrorSummary,
 				t.CreatedAt, t.StartedAt, t.FinishedAt,
-			); err != nil {
+			)
+			if err != nil {
 				return nil, err
 			}
-			counts.BackupTasks++
+			if n, _ := res.RowsAffected(); n > 0 {
+				counts.BackupTasks++
+			}
 		}
 		for _, it := range b.Data.BackupItems {
 			var tExists int
 			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM backup_tasks WHERE id = ?`, it.TaskID).Scan(&tExists)
 			if tExists == 0 {
 				continue
+			}
+			uID := it.UpstreamID
+			if mapped, ok := upstreamIDMap[uID]; ok {
+				uID = mapped
 			}
 			_, _ = tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO backup_task_items(
@@ -660,7 +744,7 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 					attempt_count, max_attempts, next_retry_at, duration_ms,
 					error_message, started_at, finished_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				it.ID, it.TaskID, it.UpstreamID, it.UpstreamName, it.UpstreamType,
+				it.ID, it.TaskID, uID, it.UpstreamName, it.UpstreamType,
 				it.RemotePath, it.RemoteETag, it.RemoteVersionID, it.Status,
 				it.AttemptCount, it.MaxAttempts, it.NextRetryAt, it.DurationMs,
 				it.ErrorMessage, it.StartedAt, it.FinishedAt,

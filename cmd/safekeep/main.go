@@ -114,6 +114,7 @@ func main() {
 	sched.Stop()
 	cancel()
 	pool.Wait()
+	backupSvc.Wait()
 	logger.Info("SafeKeep stopped")
 }
 

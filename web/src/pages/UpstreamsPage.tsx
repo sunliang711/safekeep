@@ -30,6 +30,7 @@ interface FormState {
   proxy_port: number
   proxy_username: string
   proxy_password: string
+  clear_proxy_password: boolean
 }
 
 const emptyForm = (): FormState => ({
@@ -54,6 +55,7 @@ const emptyForm = (): FormState => ({
   proxy_port: 1080,
   proxy_username: '',
   proxy_password: '',
+  clear_proxy_password: false,
 })
 
 export const UpstreamsPage: React.FC = () => {
@@ -62,6 +64,7 @@ export const UpstreamsPage: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<FormState>(emptyForm())
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [modalErr, setModalErr] = useState('')
   const [testingId, setTestingId] = useState<string | null>(null)
 
   const load = async () => {
@@ -69,6 +72,8 @@ export const UpstreamsPage: React.FC = () => {
     try {
       const res = await api.listUpstreams()
       setItems(res.items || [])
+    } catch (err: any) {
+      setMsg({ type: 'err', text: err.message || '加载上游失败' })
     } finally {
       setLoading(false)
     }
@@ -76,13 +81,18 @@ export const UpstreamsPage: React.FC = () => {
 
   useEffect(() => {
     load()
-    if (window.location.search.includes('oauth=success')) {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('oauth') === 'success') {
       setMsg({ type: 'ok', text: 'Dropbox OAuth2 授权成功，Token 已加密保存。' })
+      window.history.replaceState({}, '', '/upstreams')
+    } else if (params.get('oauth') === 'error') {
+      setMsg({ type: 'err', text: `Dropbox OAuth2 授权失败: ${params.get('reason') || '未知错误'}` })
       window.history.replaceState({}, '', '/upstreams')
     }
   }, [])
 
   const openEdit = (u: Upstream) => {
+    setModalErr('')
     setForm({
       id: u.id,
       name: u.name,
@@ -106,6 +116,7 @@ export const UpstreamsPage: React.FC = () => {
       proxy_port: u.proxy_port || 1080,
       proxy_username: u.proxy_username || '',
       proxy_password: '',
+      clear_proxy_password: false,
     })
     setModalOpen(true)
   }
@@ -113,6 +124,7 @@ export const UpstreamsPage: React.FC = () => {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setMsg(null)
+    setModalErr('')
     const config =
       form.type === 's3'
         ? {
@@ -143,7 +155,9 @@ export const UpstreamsPage: React.FC = () => {
       proxy_port: Number(form.proxy_port),
       proxy_username: form.proxy_username,
     }
-    if (!form.id || form.proxy_password !== '') {
+    if (form.clear_proxy_password) {
+      payload.proxy_password = ''
+    } else if (!form.id || form.proxy_password !== '') {
       payload.proxy_password = form.proxy_password
     }
 
@@ -157,7 +171,7 @@ export const UpstreamsPage: React.FC = () => {
       setMsg({ type: 'ok', text: '上游配置已保存' })
       await load()
     } catch (err: any) {
-      setMsg({ type: 'err', text: err.message })
+      setModalErr(err.message || '保存失败')
     }
   }
 
@@ -207,6 +221,7 @@ export const UpstreamsPage: React.FC = () => {
         </div>
         <button
           onClick={() => {
+            setModalErr('')
             setForm(emptyForm())
             setModalOpen(true)
           }}
@@ -318,6 +333,11 @@ export const UpstreamsPage: React.FC = () => {
             <h2 className="text-lg font-bold text-slate-900 mb-4">
               {form.id ? '编辑上游存储' : '添加上游存储'}
             </h2>
+            {modalErr && (
+              <div className="mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                {modalErr}
+              </div>
+            )}
             <form onSubmit={handleSave} className="space-y-4 text-sm">
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -381,6 +401,10 @@ export const UpstreamsPage: React.FC = () => {
                       <label className="block text-xs text-slate-600 mb-1">Secret Access Key {form.id ? '（留空则保持不变）' : '*'}</label>
                       <input type="password" required={!form.id} value={form.secret_access_key} onChange={(e) => setForm({ ...form, secret_access_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
+                    <div className="col-span-2">
+                      <label className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD_IA / GLACIER）</label>
+                      <input value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
                   </div>
                   <label className="inline-flex items-center gap-2 text-xs">
                     <input type="checkbox" checked={form.force_path_style} onChange={(e) => setForm({ ...form, force_path_style: e.target.checked })} />
@@ -440,7 +464,13 @@ export const UpstreamsPage: React.FC = () => {
                     </div>
                     <div className="col-span-2">
                       <label className="block text-xs text-slate-600 mb-1">代理密码（{form.id ? '留空保持不变' : '可选'}）</label>
-                      <input type="password" value={form.proxy_password} onChange={(e) => setForm({ ...form, proxy_password: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <input type="password" disabled={form.clear_proxy_password} value={form.proxy_password} onChange={(e) => setForm({ ...form, proxy_password: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg disabled:bg-slate-100" />
+                      {form.id && (
+                        <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
+                          <input type="checkbox" checked={form.clear_proxy_password} onChange={(e) => setForm({ ...form, clear_proxy_password: e.target.checked, proxy_password: '' })} />
+                          <span>清除已有代理密码</span>
+                        </label>
+                      )}
                     </div>
                   </div>
                 )}

@@ -115,12 +115,14 @@ func (e *Engine) ReloadAll(ctx context.Context) error {
 	return nil
 }
 
-// RunNow triggers a cron job immediately (synchronously or asynchronously).
-func (e *Engine) RunNow(ctx context.Context, jobID, actorName string) (*db.CronJobRun, error) {
-	if _, err := e.store.GetCronJobByID(ctx, jobID); err != nil {
+// RunNow triggers a cron job immediately detached from HTTP request cancellation.
+func (e *Engine) RunNow(_ context.Context, jobID, actorName string) (*db.CronJobRun, error) {
+	runCtx, cancel := context.WithTimeout(e.appCtx, 5*time.Minute)
+	defer cancel()
+	if _, err := e.store.GetCronJobByID(runCtx, jobID); err != nil {
 		return nil, err
 	}
-	run := e.executeJob(ctx, jobID, "manual", actorName)
+	run := e.executeJob(runCtx, jobID, "manual", actorName)
 	return run, nil
 }
 
@@ -254,10 +256,26 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 		if maxAgeHours < 1 {
 			maxAgeHours = 1
 		}
+		failedHours := intFromMap(cfg, "failed_spool_retention_hours", 72)
+		if failedHours < 1 {
+			failedHours = 72
+		}
 		settings, err := e.store.GetSystemSettings(ctx)
 		if err != nil {
 			return 0, "", err
 		}
+
+		// Clean spool files for permanently failed tasks older than failedHours so they don't leak forever.
+		var failedRemoved int64
+		if failedTasks, fErr := e.store.ListExpiredFailedTaskSpools(ctx, time.Now().UTC().Add(-time.Duration(failedHours)*time.Hour)); fErr == nil {
+			for _, ft := range failedTasks {
+				if err := os.Remove(ft.SpoolPath); err == nil || os.IsNotExist(err) {
+					_ = e.store.MarkSpoolCleaned(ctx, ft.ID)
+					failedRemoved++
+				}
+			}
+		}
+
 		activeSet, err := e.store.ListActiveSpoolPaths(ctx)
 		if err != nil {
 			return 0, "", err
@@ -265,14 +283,14 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 		entries, err := os.ReadDir(settings.SpoolDir)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return 0, "spool directory does not exist yet", nil
+				return failedRemoved, "spool directory does not exist yet", nil
 			}
-			return 0, "", err
+			return failedRemoved, "", err
 		}
 		cutoff := time.Now().Add(-time.Duration(maxAgeHours) * time.Hour)
 		var removed int64
 		for _, ent := range entries {
-			if ent.IsDir() {
+			if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".spool") {
 				continue
 			}
 			full := filepath.Join(settings.SpoolDir, ent.Name())
@@ -289,7 +307,8 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 				}
 			}
 		}
-		return removed, fmt.Sprintf("removed %d orphan spool files older than %d hours", removed, maxAgeHours), nil
+		total := removed + failedRemoved
+		return total, fmt.Sprintf("removed %d orphan .spool files and %d expired failed-task spools", removed, failedRemoved), nil
 
 	case "upstream_health_check":
 		ups, err := e.store.ListUpstreams(ctx)

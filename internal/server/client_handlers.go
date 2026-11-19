@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,8 @@ func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 
 	var filename, contentType, metadataJSON string
 	var body io.Reader
+	var preSpooledPath, preSpooledSHA string
+	var preSpooledSize int64
 
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(strings.ToLower(ct), "multipart/form-data") {
@@ -46,6 +49,9 @@ func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			if err != nil {
+				if preSpooledPath != "" {
+					_ = os.Remove(preSpooledPath)
+				}
 				writeError(w, http.StatusBadRequest, "multipart_read_error", err.Error())
 				return
 			}
@@ -79,16 +85,31 @@ func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 				}
 				_ = part.Close()
 			case "file":
-				filename = part.FileName()
-				contentType = part.Header.Get("Content-Type")
-				body = part
-				fileFound = true
+				if !fileFound {
+					filename = part.FileName()
+					contentType = part.Header.Get("Content-Type")
+					sp, sz, sha, spErr := s.backupSvc.SpoolStream(r.Context(), client, part)
+					_ = part.Close()
+					if spErr != nil {
+						status := http.StatusInternalServerError
+						code := "spool_failed"
+						var he *backup.HTTPError
+						if errors.As(spErr, &he) {
+							status = he.Status
+							code = he.Code
+						}
+						writeError(w, status, code, spErr.Error())
+						return
+					}
+					preSpooledPath = sp
+					preSpooledSize = sz
+					preSpooledSHA = sha
+					fileFound = true
+				} else {
+					_ = part.Close()
+				}
 			default:
 				_ = part.Close()
-			}
-			if fileFound {
-				// Stream the file directly without buffering the whole upload in memory.
-				break
 			}
 		}
 		if !fileFound {
@@ -112,17 +133,20 @@ func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := s.backupSvc.HandleUpload(r.Context(), backup.UploadRequest{
-		Client:         client,
-		Filename:       filename,
-		ContentType:    contentType,
-		Body:           body,
-		Mode:           mode,
-		Targets:        targets,
-		Subpath:        subpath,
-		MetadataJSON:   metadataJSON,
-		IdempotencyKey: idempKey,
-		ExpectedSHA256: expectedSHA,
-		SkipDedup:      skipDedup,
+		Client:           client,
+		Filename:         filename,
+		ContentType:      contentType,
+		Body:             body,
+		PreSpooledPath:   preSpooledPath,
+		PreSpooledSize:   preSpooledSize,
+		PreSpooledSHA256: preSpooledSHA,
+		Mode:             mode,
+		Targets:          targets,
+		Subpath:          subpath,
+		MetadataJSON:     metadataJSON,
+		IdempotencyKey:   idempKey,
+		ExpectedSHA256:   expectedSHA,
+		SkipDedup:        skipDedup,
 	})
 	if err != nil {
 		status := http.StatusInternalServerError
