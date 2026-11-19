@@ -6,7 +6,8 @@ import { AuthPage } from './pages/AuthPages'
 import { ClientsPage } from './pages/ClientsPage'
 import { CronPage } from './pages/CronPage'
 import { DashboardPage } from './pages/DashboardPage'
-import { SettingsMigrationPage } from './pages/SettingsMigrationPage'
+import { MigrationPage } from './pages/MigrationPage'
+import { SettingsPage } from './pages/SettingsPage'
 import { TasksPage } from './pages/TasksPage'
 import { UpstreamsPage } from './pages/UpstreamsPage'
 import type { Admin } from './types'
@@ -18,6 +19,7 @@ function initialTab(): NavTab {
   if (p.startsWith('/tasks')) return 'tasks'
   if (p.startsWith('/cron')) return 'cron'
   if (p.startsWith('/audit')) return 'audit'
+  if (p.startsWith('/migration')) return 'migration'
   if (p.startsWith('/settings')) return 'settings'
   return 'dashboard'
 }
@@ -92,7 +94,8 @@ export function App() {
       {tab === 'clients' && <ClientsPage />}
       {tab === 'cron' && <CronPage />}
       {tab === 'audit' && <AuditPage />}
-      {tab === 'settings' && <SettingsMigrationPage />}
+      {tab === 'migration' && <MigrationPage />}
+      {tab === 'settings' && <SettingsPage />}
     </Layout>
   )
 }

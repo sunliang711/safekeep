@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   Activity,
+  ArrowLeftRight,
   Clock,
   FileArchive,
   HardDrive,
@@ -12,7 +13,7 @@ import {
 } from 'lucide-react'
 import type { Admin } from '../types'
 
-export type NavTab = 'dashboard' | 'tasks' | 'upstreams' | 'clients' | 'cron' | 'audit' | 'settings'
+export type NavTab = 'dashboard' | 'tasks' | 'upstreams' | 'clients' | 'cron' | 'audit' | 'migration' | 'settings'
 
 interface Props {
   active: NavTab
@@ -29,7 +30,8 @@ const navItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
   { id: 'clients', label: '客户与 API Key', icon: <KeyRound className="w-4 h-4" /> },
   { id: 'cron', label: '定时任务', icon: <Clock className="w-4 h-4" /> },
   { id: 'audit', label: '审计日志', icon: <ScrollText className="w-4 h-4" /> },
-  { id: 'settings', label: '系统设置与迁移', icon: <Settings className="w-4 h-4" /> },
+  { id: 'migration', label: '环境迁移', icon: <ArrowLeftRight className="w-4 h-4" /> },
+  { id: 'settings', label: '系统设置', icon: <Settings className="w-4 h-4" /> },
 ]
 
 export const Layout: React.FC<Props> = ({ active, onNavigate, admin, onLogout, children }) => {
