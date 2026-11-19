@@ -148,6 +148,16 @@ type CronJobRun struct {
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 }
 
+type DailyTraffic struct {
+	DateKey    string     `json:"date_key"`
+	BytesUsed  int64      `json:"bytes_used"`
+	LimitBytes int64      `json:"limit_bytes"`
+	Tripped    bool       `json:"tripped"`
+	TrippedAt  *time.Time `json:"tripped_at,omitempty"`
+	NotifiedAt *time.Time `json:"notified_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
 type DashboardSummary struct {
 	TotalTasks        int64          `json:"total_tasks"`
 	SucceededTasks    int64          `json:"succeeded_tasks"`
@@ -159,6 +169,7 @@ type DashboardSummary struct {
 	HealthyUpstreams  int64          `json:"healthy_upstreams"`
 	EnabledClients    int64          `json:"enabled_clients"`
 	SpoolBytesUsed    int64          `json:"spool_bytes_used"`
+	DailyTraffic      *DailyTraffic  `json:"daily_traffic,omitempty"`
 	RecentTasks       []BackupTask   `json:"recent_tasks"`
 	Upstreams         []Upstream     `json:"upstreams"`
 }

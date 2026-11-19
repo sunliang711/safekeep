@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { AlertTriangle, RefreshCw, ShieldCheck } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import type { DashboardSummary } from '../types'
@@ -61,6 +61,52 @@ export const DashboardPage: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {data.daily_traffic && (
+        <div
+          className={`rounded-xl border p-4 flex flex-wrap items-center justify-between gap-4 ${
+            data.daily_traffic.tripped
+              ? 'bg-rose-50 border-rose-200 text-rose-900'
+              : 'bg-white border-slate-200 text-slate-800'
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            {data.daily_traffic.tripped ? (
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+            ) : (
+              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+            )}
+            <div>
+              <div className="text-sm font-semibold flex items-center gap-2">
+                <span>每日发送流量与熔断器 ({data.daily_traffic.date_key})</span>
+                <StatusBadge
+                  value={data.daily_traffic.tripped ? 'failed' : 'ok'}
+                  label={data.daily_traffic.tripped ? '已熔断 (503)' : '正常'}
+                />
+              </div>
+              <div className="text-xs opacity-80 mt-0.5">
+                今日已用：{formatBytes(data.daily_traffic.bytes_used)} /{' '}
+                {data.daily_traffic.limit_bytes > 0 ? formatBytes(data.daily_traffic.limit_bytes) : '不限'}
+                {data.daily_traffic.tripped_at && ` · 熔断时间: ${formatTime(data.daily_traffic.tripped_at)}`}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              if (!confirm('确定重置今日流量计数并解除服务熔断吗？')) return
+              await api.resetCircuitBreaker()
+              await load()
+            }}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium ${
+              data.daily_traffic.tripped
+                ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            }`}
+          >
+            {data.daily_traffic.tripped ? '解除熔断并重置今日流量' : '重置今日流量计数'}
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-5">

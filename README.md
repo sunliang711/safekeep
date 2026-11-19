@@ -11,6 +11,9 @@ SafeKeep 是一个使用 **Go** 开发的单二进制多云文件备份 HTTP 网
   - `mode=sync`：并发上传后直接返回各上游路径与 ETag；超过 `sync_timeout_sec` 自动转为后台继续执行并返回 `202 Accepted` + `task_id`。
   - `mode=async`：流式落盘后立即返回 `202 Accepted`，由后台 Worker Pool 异步执行并支持失败指数退避重试。
   - **SHA-256 秒传去重**：同一客户再次上传相同哈希的文件时，若目标上游已有成功备份则直接返回成功（`deduplicated: true`），无需重复传输；同名文件自动追加时间戳与 Task ID 前缀防止覆盖。
+- **单文件超限拒绝与每日流量熔断（SMTP 邮件告警）**：
+  - 单文件默认上限 `100 MiB`（可在 Web 端或客户级覆盖），超过时拒绝请求（`413`）并异步发送 SMTP 告警邮件。
+  - 每日累计发送默认上限 `1 GiB`（可在 Web 端配置，`0` 为不限），超过时自动熔断服务（返回 `503`）并发送一次熔断告警邮件；次日自动恢复，也可在 Web 仪表盘手动解除熔断。
 - **审计日志与定时任务**：内置 `robfig/cron/v3` 调度器（清理过期审计日志、清理旧任务记录、缓冲盘孤儿文件回收、上游健康巡检、Dropbox Token 预刷新），支持 Web 端修改 Cron 与立即运行。
 - **加密迁移导出与导入（`.skbundle`）**：支持导出含配置、凭证（临时迁移口令 Argon2id + AES-256-GCM 加密）及可选历史任务索引的迁移包，并在新环境预检冲突、重加密落库与一键恢复（保留原客户 API Key 哈希，客户端无需换 Key）。
 
@@ -26,8 +29,9 @@ SafeKeep 是一个使用 **Go** 开发的单二进制多云文件备份 HTTP 网
 - `SAFEKEEP_CORS_ORIGINS`：额外允许的跨域 Origin（逗号分隔）
 - `SAFEKEEP_PUBLIC_BASE_URL`：对外回调地址（默认 `http://localhost:8333`）
 - `SAFEKEEP_SPOOL_DIR`：临时缓冲目录（默认 `./data/spool`）
-- `SAFEKEEP_MAX_FILE_SIZE_BYTES` / `SAFEKEEP_MAX_SPOOL_BYTES`
+- `SAFEKEEP_MAX_FILE_SIZE_BYTES`（默认 `104857600` = 100 MiB）/ `SAFEKEEP_DAILY_TRAFFIC_LIMIT_BYTES`（默认 `1073741824` = 1 GiB）/ `SAFEKEEP_MAX_SPOOL_BYTES`
 - `SAFEKEEP_WORKER_CONCURRENCY` / `SAFEKEEP_SYNC_TIMEOUT_SEC` / `SAFEKEEP_MAX_RETRY_ATTEMPTS`
+- `SAFEKEEP_SMTP_ENABLED` / `SAFEKEEP_SMTP_HOST` / `SAFEKEEP_SMTP_PORT` / `SAFEKEEP_SMTP_TLS_MODE` / `SAFEKEEP_SMTP_USERNAME` / `SAFEKEEP_SMTP_PASSWORD` / `SAFEKEEP_SMTP_FROM_EMAIL` / `SAFEKEEP_SMTP_TO_EMAILS`
 
 ## 快速运行
 

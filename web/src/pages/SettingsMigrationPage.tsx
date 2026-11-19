@@ -1,12 +1,24 @@
 import React, { useEffect, useState } from 'react'
-import { Download, ShieldAlert, Upload } from 'lucide-react'
-import { api, formatTime } from '../api'
+import { Download, Mail, ShieldAlert, Upload } from 'lucide-react'
+import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import type { Admin, InspectSummary, SystemSettings } from '../types'
 
 export const SettingsMigrationPage: React.FC = () => {
   const [settings, setSettings] = useState<SystemSettings | null>(null)
   const [admins, setAdmins] = useState<Admin[]>([])
+  const [smtpEnabled, setSmtpEnabled] = useState(false)
+  const [smtpHost, setSmtpHost] = useState('')
+  const [smtpPort, setSmtpPort] = useState(587)
+  const [smtpTLSMode, setSmtpTLSMode] = useState<'starttls' | 'tls' | 'none'>('starttls')
+  const [smtpUsername, setSmtpUsername] = useState('')
+  const [smtpPassword, setSmtpPassword] = useState('')
+  const [smtpHasPassword, setSmtpHasPassword] = useState(false)
+  const [smtpClearPassword, setSmtpClearPassword] = useState(false)
+  const [smtpFromEmail, setSmtpFromEmail] = useState('')
+  const [smtpFromName, setSmtpFromName] = useState('SafeKeep')
+  const [smtpToEmails, setSmtpToEmails] = useState('')
+  const [smtpTesting, setSmtpTesting] = useState(false)
   const [newAdminUser, setNewAdminUser] = useState('')
   const [newAdminPass, setNewAdminPass] = useState('')
   const [oldPwd, setOldPwd] = useState('')
@@ -32,11 +44,63 @@ export const SettingsMigrationPage: React.FC = () => {
 
   const load = async () => {
     try {
-      const [s, a] = await Promise.all([api.getSettings(), api.listAdmins()])
+      const [s, a, smtp] = await Promise.all([api.getSettings(), api.listAdmins(), api.getSMTP()])
       setSettings(s)
       setAdmins(a.items || [])
+      setSmtpEnabled(smtp.enabled)
+      setSmtpHost(smtp.host || '')
+      setSmtpPort(smtp.port || 587)
+      setSmtpTLSMode(smtp.tls_mode || 'starttls')
+      setSmtpUsername(smtp.username || '')
+      setSmtpHasPassword(smtp.has_password)
+      setSmtpPassword('')
+      setSmtpClearPassword(false)
+      setSmtpFromEmail(smtp.from_email || '')
+      setSmtpFromName(smtp.from_name || 'SafeKeep')
+      setSmtpToEmails((smtp.to_emails || []).join(', '))
     } catch (e: any) {
       setErr(e.message || '加载设置失败')
+    }
+  }
+
+  const smtpPayload = () => ({
+    enabled: smtpEnabled,
+    host: smtpHost,
+    port: Number(smtpPort),
+    tls_mode: smtpTLSMode,
+    username: smtpUsername,
+    ...(smtpClearPassword ? { clear_password: true } : smtpPassword !== '' ? { password: smtpPassword } : {}),
+    from_email: smtpFromEmail,
+    from_name: smtpFromName,
+    to_emails: smtpToEmails.split(',').map((s) => s.trim()).filter(Boolean),
+  })
+
+  const saveSMTP = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setMsg('')
+    setErr('')
+    try {
+      const updated = await api.updateSMTP(smtpPayload())
+      setSmtpHasPassword(updated.has_password)
+      setSmtpPassword('')
+      setSmtpClearPassword(false)
+      setMsg('SMTP 邮件告警配置已保存')
+    } catch (e: any) {
+      setErr(e.message)
+    }
+  }
+
+  const testSMTP = async () => {
+    setMsg('')
+    setErr('')
+    setSmtpTesting(true)
+    try {
+      await api.testSMTP(smtpPayload())
+      setMsg('测试邮件发送成功，请检查收件箱！')
+    } catch (e: any) {
+      setErr(`测试邮件发送失败: ${e.message}`)
+    } finally {
+      setSmtpTesting(false)
     }
   }
 
@@ -289,8 +353,16 @@ export const SettingsMigrationPage: React.FC = () => {
               <input value={settings.public_base_url} onChange={(e) => setSettings({ ...settings, public_base_url: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
             </div>
             <div>
-              <label className="block text-xs text-slate-600 mb-1">默认单文件上限（字节）</label>
-              <input type="number" value={settings.max_file_size_bytes} onChange={(e) => setSettings({ ...settings, max_file_size_bytes: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
+              <label className="block text-xs text-slate-600 mb-1">
+                默认单文件上限（字节，当前 {formatBytes(settings.max_file_size_bytes)}，默认 100 MiB）
+              </label>
+              <input type="number" min={1} value={settings.max_file_size_bytes} onChange={(e) => setSettings({ ...settings, max_file_size_bytes: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">
+                每日发送熔断阈值（字节，当前 {settings.daily_traffic_limit_bytes > 0 ? formatBytes(settings.daily_traffic_limit_bytes) : '不熔断'}，默认 1 GiB）
+              </label>
+              <input type="number" min={0} value={settings.daily_traffic_limit_bytes} onChange={(e) => setSettings({ ...settings, daily_traffic_limit_bytes: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
             </div>
             <div>
               <label className="block text-xs text-slate-600 mb-1">本地缓冲总容量上限（字节，0=不限）</label>
@@ -316,6 +388,77 @@ export const SettingsMigrationPage: React.FC = () => {
           </form>
         </div>
       )}
+
+      {/* SMTP Settings */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 font-semibold text-slate-900">
+            <Mail className="w-4 h-4 text-indigo-600" />
+            <span>SMTP 邮件告警设置</span>
+          </div>
+          <span className="text-xs text-slate-500">用于单文件超限拒绝与每日流量熔断告警通知</span>
+        </div>
+        <form onSubmit={saveSMTP} className="space-y-4 text-sm">
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={smtpEnabled} onChange={(e) => setSmtpEnabled(e.target.checked)} />
+            <span className="font-medium">启用 SMTP 邮件告警</span>
+          </label>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">SMTP 服务器主机</label>
+              <input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="smtp.qq.com" className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">端口</label>
+              <input type="number" min={1} max={65535} value={smtpPort} onChange={(e) => setSmtpPort(Number(e.target.value))} className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">加密方式</label>
+              <select value={smtpTLSMode} onChange={(e) => setSmtpTLSMode(e.target.value as any)} className="w-full px-3 py-1.5 border rounded-lg bg-white">
+                <option value="starttls">STARTTLS (常用 587)</option>
+                <option value="tls">SSL/TLS 直连 (常用 465)</option>
+                <option value="none">不加密 (内网/测试 25)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">SMTP 用户名</label>
+              <input value={smtpUsername} onChange={(e) => setSmtpUsername(e.target.value)} placeholder="alerts@example.com" className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">
+                SMTP 密码/授权码 {smtpHasPassword ? '（已配置，留空保持不变）' : ''}
+              </label>
+              <input type="password" disabled={smtpClearPassword} value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)} className="w-full px-3 py-1.5 border rounded-lg disabled:bg-slate-100" />
+              {smtpHasPassword && (
+                <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
+                  <input type="checkbox" checked={smtpClearPassword} onChange={(e) => { setSmtpClearPassword(e.target.checked); setSmtpPassword('') }} />
+                  <span>清除已有 SMTP 密码</span>
+                </label>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">发件人名称</label>
+              <input value={smtpFromName} onChange={(e) => setSmtpFromName(e.target.value)} placeholder="SafeKeep" className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">发件人邮箱</label>
+              <input value={smtpFromEmail} onChange={(e) => setSmtpFromEmail(e.target.value)} placeholder="alerts@example.com" className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs text-slate-600 mb-1">告警收件人邮箱（多个用逗号分隔）</label>
+              <input value={smtpToEmails} onChange={(e) => setSmtpToEmails(e.target.value)} placeholder="ops@example.com, admin@example.com" className="w-full px-3 py-1.5 border rounded-lg" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={testSMTP} disabled={smtpTesting} className="px-4 py-2 border border-slate-300 hover:bg-slate-50 rounded-lg text-sm">
+              {smtpTesting ? '发送中...' : '发送测试邮件'}
+            </button>
+            <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium">
+              保存 SMTP 配置
+            </button>
+          </div>
+        </form>
+      </div>
 
       {/* Admins */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">

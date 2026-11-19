@@ -5,8 +5,10 @@ import type {
   Client,
   CronJob,
   CronJobRun,
+  DailyTraffic,
   DashboardSummary,
   InspectSummary,
+  SMTPConfig,
   SystemSettings,
   Upstream,
 } from './types'
@@ -110,6 +112,15 @@ export const api = {
   getSettings: () => req<SystemSettings>('/admin/api/v1/settings'),
   updateSettings: (payload: SystemSettings) =>
     req<SystemSettings>('/admin/api/v1/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  getSMTP: () => req<SMTPConfig>('/admin/api/v1/settings/smtp'),
+  updateSMTP: (payload: any) =>
+    req<SMTPConfig>('/admin/api/v1/settings/smtp', { method: 'PUT', body: JSON.stringify(payload) }),
+  testSMTP: (payload?: any) =>
+    req<{ status: string }>('/admin/api/v1/settings/smtp/test', {
+      method: 'POST',
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+    }),
+  resetCircuitBreaker: () => req<DailyTraffic>('/admin/api/v1/circuit-breaker/reset', { method: 'POST' }),
   listAdmins: () => req<{ items: Admin[] }>('/admin/api/v1/admins'),
   createAdmin: (username: string, password: string) =>
     req<Admin>('/admin/api/v1/admins', { method: 'POST', body: JSON.stringify({ username, password }) }),

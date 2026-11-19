@@ -20,8 +20,10 @@ import (
 	"syscall"
 	"time"
 
+	"safekeep/internal/audit"
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
+	"safekeep/internal/notify"
 	"safekeep/internal/storage"
 )
 
@@ -73,6 +75,7 @@ type Service struct {
 	cipher   *crypto.Cipher
 	registry *storage.Registry
 	enqueuer TaskEnqueuer
+	auditLog *audit.Logger
 	appCtx   context.Context
 	hookHTTP *http.Client
 
@@ -137,6 +140,10 @@ func (s *Service) SetEnqueuer(e TaskEnqueuer) {
 	s.enqueuer = e
 }
 
+func (s *Service) SetAuditLogger(a *audit.Logger) {
+	s.auditLog = a
+}
+
 // Wait blocks until all background sync-fallback and webhook goroutines finish.
 func (s *Service) Wait() {
 	s.wg.Wait()
@@ -158,11 +165,18 @@ func (s *Service) finishTask(taskID string) {
 	s.mu.Unlock()
 }
 
-// SpoolStream streams an incoming reader to the spool directory while enforcing file and spool limits.
-func (s *Service) SpoolStream(ctx context.Context, client *db.Client, r io.Reader) (string, int64, string, error) {
+// SpoolStream streams an incoming reader to the spool directory while enforcing circuit breaker, file size, and spool limits.
+func (s *Service) SpoolStream(ctx context.Context, client *db.Client, filename string, r io.Reader) (string, int64, string, error) {
 	settings, err := s.store.GetSystemSettings(ctx)
 	if err != nil {
 		return "", 0, "", err
+	}
+	if tripped, used, cbErr := s.store.IsCircuitBreakerTripped(ctx, db.TodayDateKey(), settings.DailyTrafficLimitBytes); cbErr == nil && tripped {
+		return "", 0, "", &HTTPError{
+			Status:  http.StatusServiceUnavailable,
+			Code:    "circuit_breaker_open",
+			Message: fmt.Sprintf("daily backup quota exceeded (%d / %d bytes), service circuit breaker is open", used, settings.DailyTrafficLimitBytes),
+		}
 	}
 	if err := s.checkSpoolQuota(settings.SpoolDir, settings.MaxSpoolBytes); err != nil {
 		return "", 0, "", err
@@ -172,7 +186,7 @@ func (s *Service) SpoolStream(ctx context.Context, client *db.Client, r io.Reade
 		maxSize = client.MaxFileSizeBytes
 	}
 	if maxSize <= 0 {
-		maxSize = 512 * 1024 * 1024
+		maxSize = 100 * 1024 * 1024
 	}
 	if err := os.MkdirAll(settings.SpoolDir, 0o750); err != nil {
 		return "", 0, "", fmt.Errorf("create spool dir: %w", err)
@@ -196,6 +210,7 @@ func (s *Service) SpoolStream(ctx context.Context, client *db.Client, r io.Reade
 	}
 	if written > maxSize {
 		_ = os.Remove(spoolPath)
+		s.notifyOversizeRejection(client, sanitizeFilename(filename), written, maxSize)
 		return "", 0, "", &HTTPError{
 			Status:  http.StatusRequestEntityTooLarge,
 			Code:    "file_too_large",
@@ -203,6 +218,96 @@ func (s *Service) SpoolStream(ctx context.Context, client *db.Client, r io.Reade
 		}
 	}
 	return spoolPath, written, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func (s *Service) notifyOversizeRejection(client *db.Client, filename string, attemptedBytes, maxBytes int64) {
+	clientName := "unknown"
+	clientID := ""
+	if client != nil {
+		clientName = client.Name
+		clientID = client.ID
+	}
+	subject := fmt.Sprintf("[SafeKeep 告警] 单文件超过限制已拒绝 (%s)", filename)
+	body := fmt.Sprintf(
+		"SafeKeep 拒绝了一次超大文件上传请求：\n\n"+
+			"- 客户名称: %s (%s)\n"+
+			"- 文件名称: %s\n"+
+			"- 拦截时已接收字节: >= %d bytes (%.2f MB)\n"+
+			"- 允许单文件上限: %d bytes (%.2f MB)\n"+
+			"- 触发时间: %s\n",
+		clientName, clientID, filename,
+		attemptedBytes, float64(attemptedBytes)/(1024*1024),
+		maxBytes, float64(maxBytes)/(1024*1024),
+		time.Now().Format(time.RFC3339),
+	)
+	s.spawnAlertEmail("alert.oversize_rejected", clientID, subject, body)
+}
+
+func (s *Service) notifyCircuitBreakerTripped(client *db.Client, filename string, attemptedBytes, currentUsed, dailyLimit int64) {
+	clientName := "unknown"
+	clientID := ""
+	if client != nil {
+		clientName = client.Name
+		clientID = client.ID
+	}
+	subject := fmt.Sprintf("[SafeKeep 熔断告警] 每日备份流量已达上限 (%s)", db.TodayDateKey())
+	body := fmt.Sprintf(
+		"SafeKeep 今日备份流量超过每日熔断阈值，服务已自动熔断（新上传请求将返回 503）：\n\n"+
+			"- 日期: %s\n"+
+			"- 今日已用流量: %d bytes (%.2f GB)\n"+
+			"- 触发本次请求大小: %d bytes (%.2f MB)\n"+
+			"- 每日熔断阈值: %d bytes (%.2f GB)\n"+
+			"- 触发客户: %s (%s)\n"+
+			"- 触发文件: %s\n"+
+			"- 触发时间: %s\n\n"+
+			"如需提前恢复服务，请登录 SafeKeep Web 管理端仪表盘点击「解除熔断 / 重置今日流量」。\n",
+		db.TodayDateKey(),
+		currentUsed, float64(currentUsed)/(1024*1024*1024),
+		attemptedBytes, float64(attemptedBytes)/(1024*1024),
+		dailyLimit, float64(dailyLimit)/(1024*1024*1024),
+		clientName, clientID, filename,
+		time.Now().Format(time.RFC3339),
+	)
+	s.spawnAlertEmail("alert.circuit_breaker_tripped", db.TodayDateKey(), subject, body)
+}
+
+func (s *Service) spawnAlertEmail(action, resourceID, subject, body string) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ctx, cancel := context.WithTimeout(s.appCtx, 20*time.Second)
+		defer cancel()
+
+		cfg, err := s.store.GetSMTPConfig(ctx, s.cipher)
+		if err != nil {
+			if s.auditLog != nil {
+				s.auditLog.Record(ctx, audit.Event{
+					ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+					Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+					Status: "failure", Detail: map[string]any{"error": err.Error()},
+				})
+			}
+			return
+		}
+		if !cfg.Enabled {
+			return
+		}
+
+		sendErr := notify.Send(ctx, cfg, subject, body)
+		if s.auditLog != nil {
+			status := "success"
+			detail := map[string]any{"subject": subject, "to": cfg.ToEmails}
+			if sendErr != nil {
+				status = "failure"
+				detail["error"] = sendErr.Error()
+			}
+			s.auditLog.Record(ctx, audit.Event{
+				ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+				Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+				Status: status, Detail: detail,
+			})
+		}
+	}()
 }
 
 func (s *Service) checkSpoolQuota(spoolDir string, maxSpoolBytes int64) error {
@@ -280,6 +385,14 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		cleanupPreSpool()
 		return nil, err
 	}
+	if tripped, used, cbErr := s.store.IsCircuitBreakerTripped(ctx, db.TodayDateKey(), settings.DailyTrafficLimitBytes); cbErr == nil && tripped {
+		cleanupPreSpool()
+		return nil, &HTTPError{
+			Status:  http.StatusServiceUnavailable,
+			Code:    "circuit_breaker_open",
+			Message: fmt.Sprintf("daily backup quota exceeded (%d / %d bytes), service circuit breaker is open", used, settings.DailyTrafficLimitBytes),
+		}
+	}
 
 	subpath, err := sanitizeSubpath(req.Subpath)
 	if err != nil {
@@ -297,7 +410,7 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 	written := req.PreSpooledSize
 	shaHex := req.PreSpooledSHA256
 	if spoolPath == "" {
-		spoolPath, written, shaHex, err = s.SpoolStream(ctx, req.Client, req.Body)
+		spoolPath, written, shaHex, err = s.SpoolStream(ctx, req.Client, safeName, req.Body)
 		if err != nil {
 			return nil, err
 		}
@@ -432,6 +545,25 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 			StatusCode: http.StatusOK,
 			Task:       task,
 		}, nil
+	}
+
+	if settings.DailyTrafficLimitBytes > 0 {
+		allowed, shouldNotify, used, cbErr := s.store.CheckAndReserveDailyTraffic(ctx, db.TodayDateKey(), written, settings.DailyTrafficLimitBytes)
+		if cbErr != nil {
+			_ = os.Remove(spoolPath)
+			return nil, cbErr
+		}
+		if !allowed {
+			_ = os.Remove(spoolPath)
+			if shouldNotify {
+				s.notifyCircuitBreakerTripped(req.Client, safeName, written, used, settings.DailyTrafficLimitBytes)
+			}
+			return nil, &HTTPError{
+				Status:  http.StatusServiceUnavailable,
+				Code:    "circuit_breaker_open",
+				Message: fmt.Sprintf("daily backup quota exceeded (%d / %d bytes), service circuit breaker tripped", used, settings.DailyTrafficLimitBytes),
+			}
+		}
 	}
 
 	if mode == "async" {

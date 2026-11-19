@@ -761,5 +761,134 @@ func (s *Store) GetDashboardSummary(ctx context.Context) (*DashboardSummary, err
 	if err == nil {
 		d.Upstreams = ups
 	}
+	if settings, err := s.GetSystemSettings(ctx); err == nil {
+		if dt, dErr := s.GetDailyTraffic(ctx, TodayDateKey(), settings.DailyTrafficLimitBytes); dErr == nil {
+			d.DailyTraffic = dt
+		}
+	}
 	return &d, nil
+}
+
+// TodayDateKey returns today's local date string (YYYY-MM-DD) for daily quota tracking.
+func TodayDateKey() string {
+	return time.Now().Format("2006-01-02")
+}
+
+// GetDailyTraffic returns traffic usage and circuit breaker state for the given dateKey.
+func (s *Store) GetDailyTraffic(ctx context.Context, dateKey string, limitBytes int64) (*DailyTraffic, error) {
+	dt := &DailyTraffic{
+		DateKey:    dateKey,
+		LimitBytes: limitBytes,
+	}
+	var trippedAt, notifiedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx,
+		`SELECT bytes_used, tripped_at, notified_at, updated_at FROM daily_traffic WHERE date_key = ?`,
+		dateKey,
+	).Scan(&dt.BytesUsed, &trippedAt, &notifiedAt, &dt.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			dt.UpdatedAt = time.Now().UTC()
+			return dt, nil
+		}
+		return nil, err
+	}
+	if trippedAt.Valid {
+		v := trippedAt.Time
+		dt.TrippedAt = &v
+	}
+	if notifiedAt.Valid {
+		v := notifiedAt.Time
+		dt.NotifiedAt = &v
+	}
+	dt.Tripped = trippedAt.Valid || (limitBytes > 0 && dt.BytesUsed >= limitBytes)
+	return dt, nil
+}
+
+// IsCircuitBreakerTripped checks whether the service circuit breaker is currently open for dateKey.
+func (s *Store) IsCircuitBreakerTripped(ctx context.Context, dateKey string, limitBytes int64) (bool, int64, error) {
+	if limitBytes <= 0 {
+		return false, 0, nil
+	}
+	dt, err := s.GetDailyTraffic(ctx, dateKey, limitBytes)
+	if err != nil {
+		return false, 0, err
+	}
+	return dt.Tripped, dt.BytesUsed, nil
+}
+
+// CheckAndReserveDailyTraffic atomically checks the daily quota and reserves addBytes if within limit.
+// If limitBytes is exceeded, it trips the circuit breaker and returns shouldNotify=true once per trip.
+func (s *Store) CheckAndReserveDailyTraffic(ctx context.Context, dateKey string, addBytes, limitBytes int64) (allowed bool, shouldNotify bool, currentUsed int64, err error) {
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, false, 0, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO daily_traffic(date_key, bytes_used, updated_at) VALUES (?, 0, ?)`,
+		dateKey, now,
+	); err != nil {
+		return false, false, 0, err
+	}
+
+	var used int64
+	var trippedAt, notifiedAt sql.NullTime
+	if err := tx.QueryRowContext(ctx,
+		`SELECT bytes_used, tripped_at, notified_at FROM daily_traffic WHERE date_key = ?`,
+		dateKey,
+	).Scan(&used, &trippedAt, &notifiedAt); err != nil {
+		return false, false, 0, err
+	}
+
+	if limitBytes > 0 && (trippedAt.Valid || used >= limitBytes || used+addBytes > limitBytes) {
+		if !trippedAt.Valid {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE daily_traffic SET tripped_at = ?, updated_at = ? WHERE date_key = ?`,
+				now, now, dateKey,
+			); err != nil {
+				return false, false, used, err
+			}
+		}
+		if !notifiedAt.Valid {
+			res, err := tx.ExecContext(ctx,
+				`UPDATE daily_traffic SET notified_at = ?, updated_at = ? WHERE date_key = ? AND notified_at IS NULL`,
+				now, now, dateKey,
+			)
+			if err != nil {
+				return false, false, used, err
+			}
+			if n, _ := res.RowsAffected(); n == 1 {
+				shouldNotify = true
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return false, false, used, err
+		}
+		return false, shouldNotify, used, nil
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE daily_traffic SET bytes_used = bytes_used + ?, updated_at = ? WHERE date_key = ?`,
+		addBytes, now, dateKey,
+	); err != nil {
+		return false, false, used, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, false, used, err
+	}
+	return true, false, used + addBytes, nil
+}
+
+// ResetDailyCircuitBreaker resets today's traffic counter and clears the tripped state.
+func (s *Store) ResetDailyCircuitBreaker(ctx context.Context, dateKey string) error {
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO daily_traffic(date_key, bytes_used, tripped_at, notified_at, updated_at)
+		 VALUES (?, 0, NULL, NULL, ?)
+		 ON CONFLICT(date_key) DO UPDATE SET bytes_used = 0, tripped_at = NULL, notified_at = NULL, updated_at = excluded.updated_at`,
+		dateKey, now,
+	)
+	return err
 }

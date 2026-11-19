@@ -10,6 +10,7 @@ import (
 
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
+	"safekeep/internal/notify"
 )
 
 const FormatVersion = 1
@@ -163,6 +164,21 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 		if err := rows.Scan(&r.Key, &r.ValueJSON, &r.UpdatedAt, &r.UpdatedBy); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if r.Key == "smtp_config" {
+			var sc notify.SMTPConfig
+			if json.Unmarshal([]byte(r.ValueJSON), &sc) == nil && sc.PasswordEncrypted != "" {
+				plain, decErr := s.cipher.DecryptString(sc.PasswordEncrypted)
+				if decErr != nil {
+					rows.Close()
+					return nil, fmt.Errorf("decrypt smtp password: %w", decErr)
+				}
+				sc.Password = plain
+				sc.PasswordEncrypted = ""
+				if b, mErr := json.Marshal(sc); mErr == nil {
+					r.ValueJSON = string(b)
+				}
+			}
 		}
 		data.SystemSettings = append(data.SystemSettings, r)
 	}
@@ -470,10 +486,25 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 
 	// 1. System Settings
 	for _, st := range b.Data.SystemSettings {
+		valJSON := st.ValueJSON
+		if st.Key == "smtp_config" {
+			var sc notify.SMTPConfig
+			if json.Unmarshal([]byte(valJSON), &sc) == nil && sc.Password != "" {
+				enc, encErr := s.cipher.EncryptString(sc.Password)
+				if encErr != nil {
+					return nil, encErr
+				}
+				sc.PasswordEncrypted = enc
+				sc.Password = ""
+				if mBytes, mErr := json.Marshal(sc); mErr == nil {
+					valJSON = string(mBytes)
+				}
+			}
+		}
 		if mode == "merge" && conflict == "skip" {
 			if _, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO system_settings(key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?)`,
-				st.Key, st.ValueJSON, st.UpdatedAt, st.UpdatedBy,
+				st.Key, valJSON, st.UpdatedAt, st.UpdatedBy,
 			); err != nil {
 				return nil, err
 			}
@@ -481,7 +512,7 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO system_settings(key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?)
 				 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
-				st.Key, st.ValueJSON, st.UpdatedAt, st.UpdatedBy,
+				st.Key, valJSON, st.UpdatedAt, st.UpdatedBy,
 			); err != nil {
 				return nil, err
 			}

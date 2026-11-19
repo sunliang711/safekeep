@@ -145,11 +145,34 @@ export interface AuditLog {
 export interface SystemSettings {
   spool_dir: string;
   max_file_size_bytes: number;
+  daily_traffic_limit_bytes: number;
   max_spool_bytes: number;
   worker_concurrency: number;
   sync_timeout_sec: number;
   max_retry_attempts: number;
   public_base_url: string;
+}
+
+export interface SMTPConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  tls_mode: 'starttls' | 'tls' | 'none';
+  username: string;
+  has_password: boolean;
+  from_email: string;
+  from_name: string;
+  to_emails: string[];
+}
+
+export interface DailyTraffic {
+  date_key: string;
+  bytes_used: number;
+  limit_bytes: number;
+  tripped: boolean;
+  tripped_at?: string;
+  notified_at?: string;
+  updated_at: string;
 }
 
 export interface DashboardSummary {
@@ -163,6 +186,7 @@ export interface DashboardSummary {
   healthy_upstreams: number;
   enabled_clients: number;
   spool_bytes_used: number;
+  daily_traffic?: DailyTraffic;
   recent_tasks: BackupTask[];
   upstreams: Upstream[];
 }

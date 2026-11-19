@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"safekeep/internal/config"
+	"safekeep/internal/crypto"
+	"safekeep/internal/notify"
 )
 
 var ErrNotFound = errors.New("record not found")
@@ -43,6 +45,8 @@ func (s *Store) GetSystemSettings(ctx context.Context) (config.SystemSettings, e
 			_ = json.Unmarshal([]byte(v), &settings.SpoolDir)
 		case "max_file_size_bytes":
 			_ = json.Unmarshal([]byte(v), &settings.MaxFileSizeBytes)
+		case "daily_traffic_limit_bytes":
+			_ = json.Unmarshal([]byte(v), &settings.DailyTrafficLimitBytes)
 		case "max_spool_bytes":
 			_ = json.Unmarshal([]byte(v), &settings.MaxSpoolBytes)
 		case "worker_concurrency":
@@ -60,13 +64,14 @@ func (s *Store) GetSystemSettings(ctx context.Context) (config.SystemSettings, e
 
 func (s *Store) UpdateSystemSettings(ctx context.Context, settings config.SystemSettings, updatedBy string) error {
 	pairs := map[string]any{
-		"spool_dir":           settings.SpoolDir,
-		"max_file_size_bytes": settings.MaxFileSizeBytes,
-		"max_spool_bytes":     settings.MaxSpoolBytes,
-		"worker_concurrency":  settings.WorkerConcurrency,
-		"sync_timeout_sec":    settings.SyncTimeoutSec,
-		"max_retry_attempts":  settings.MaxRetryAttempts,
-		"public_base_url":     settings.PublicBaseURL,
+		"spool_dir":                 settings.SpoolDir,
+		"max_file_size_bytes":       settings.MaxFileSizeBytes,
+		"daily_traffic_limit_bytes": settings.DailyTrafficLimitBytes,
+		"max_spool_bytes":           settings.MaxSpoolBytes,
+		"worker_concurrency":        settings.WorkerConcurrency,
+		"sync_timeout_sec":          settings.SyncTimeoutSec,
+		"max_retry_attempts":        settings.MaxRetryAttempts,
+		"public_base_url":           settings.PublicBaseURL,
 	}
 	now := time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -90,6 +95,61 @@ func (s *Store) UpdateSystemSettings(ctx context.Context, settings config.System
 		}
 	}
 	return tx.Commit()
+}
+
+// GetSMTPConfig loads SMTP alerting settings and decrypts the stored SMTP password.
+func (s *Store) GetSMTPConfig(ctx context.Context, cipher *crypto.Cipher) (notify.SMTPConfig, error) {
+	cfg := notify.SMTPConfig{
+		Port:     587,
+		TLSMode:  "starttls",
+		FromName: "SafeKeep",
+	}
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM system_settings WHERE key = 'smtp_config'`).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return cfg, nil
+		}
+		return cfg, err
+	}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return cfg, err
+	}
+	if cfg.PasswordEncrypted != "" && cipher != nil {
+		plain, err := cipher.DecryptString(cfg.PasswordEncrypted)
+		if err != nil {
+			return cfg, fmt.Errorf("decrypt smtp password: %w", err)
+		}
+		cfg.Password = plain
+	}
+	return cfg, nil
+}
+
+// SaveSMTPConfig encrypts the SMTP password and persists SMTP settings into system_settings.
+func (s *Store) SaveSMTPConfig(ctx context.Context, cipher *crypto.Cipher, cfg notify.SMTPConfig, updatedBy string) error {
+	toStore := cfg
+	if cfg.Password != "" && cipher != nil {
+		enc, err := cipher.EncryptString(cfg.Password)
+		if err != nil {
+			return err
+		}
+		toStore.PasswordEncrypted = enc
+	} else if cfg.Password == "" && cfg.PasswordEncrypted == "" {
+		toStore.PasswordEncrypted = ""
+	}
+	toStore.Password = ""
+
+	raw, err := json.Marshal(toStore)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO system_settings(key, value_json, updated_at, updated_by)
+		 VALUES ('smtp_config', ?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
+		string(raw), time.Now().UTC(), updatedBy,
+	)
+	return err
 }
 
 // --- Admins ---

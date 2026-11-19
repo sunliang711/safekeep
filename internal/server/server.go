@@ -168,6 +168,10 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/settings", s.handleGetSettings)
 			r.Put("/settings", s.handleUpdateSettings)
+			r.Get("/settings/smtp", s.handleGetSMTPSettings)
+			r.Put("/settings/smtp", s.handleUpdateSMTPSettings)
+			r.Post("/settings/smtp/test", s.handleTestSMTPSettings)
+			r.Post("/circuit-breaker/reset", s.handleResetCircuitBreaker)
 
 			r.Get("/admins", s.handleListAdmins)
 			r.Post("/admins", s.handleCreateAdmin)

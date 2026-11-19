@@ -1,17 +1,21 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -500,5 +504,165 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	expectedRedirect := env.srv.URL + "/admin/api/v1/oauth/dropbox/callback"
 	if oauthStartResp.StatusCode != http.StatusOK || oauthOut.RedirectURI != expectedRedirect {
 		t.Fatalf("expected redirect_uri %q, got status=%d redirect_uri=%q", expectedRedirect, oauthStartResp.StatusCode, oauthOut.RedirectURI)
+	}
+
+	// 14. SMTP alerts, oversize file rejection (>max_file_size_bytes), and daily circuit breaker (>daily_traffic_limit_bytes)
+	smtpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer smtpLn.Close()
+
+	var smtpMu sync.Mutex
+	var receivedEmails []string
+	go func() {
+		for {
+			conn, err := smtpLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				_, _ = c.Write([]byte("220 mock-smtp\r\n"))
+				inData := false
+				var dataBuf strings.Builder
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if inData {
+						if line == ".\r\n" {
+							inData = false
+							parts := strings.SplitN(dataBuf.String(), "\r\n\r\n", 2)
+							bodyText := dataBuf.String()
+							if len(parts) == 2 {
+								if dec, dErr := base64.StdEncoding.DecodeString(strings.ReplaceAll(parts[1], "\r\n", "")); dErr == nil {
+									bodyText = string(dec)
+								}
+							}
+							smtpMu.Lock()
+							receivedEmails = append(receivedEmails, bodyText)
+							smtpMu.Unlock()
+							dataBuf.Reset()
+							_, _ = c.Write([]byte("250 OK\r\n"))
+							continue
+						}
+						dataBuf.WriteString(line)
+						continue
+					}
+					upper := strings.ToUpper(strings.TrimSpace(line))
+					switch {
+					case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
+						_, _ = c.Write([]byte("250-mock-smtp\r\n250 OK\r\n"))
+					case upper == "DATA":
+						inData = true
+						_, _ = c.Write([]byte("354 End with <CRLF>.<CRLF>\r\n"))
+					case upper == "QUIT":
+						_, _ = c.Write([]byte("221 Bye\r\n"))
+						return
+					default:
+						_, _ = c.Write([]byte("250 OK\r\n"))
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	smtpHost, smtpPortStr, _ := net.SplitHostPort(smtpLn.Addr().String())
+	smtpPort, _ := strconv.Atoi(smtpPortStr)
+
+	smtpSaveResp := env.adminReq(t, http.MethodPut, "/admin/api/v1/settings/smtp", map[string]any{
+		"enabled":    true,
+		"host":       smtpHost,
+		"port":       smtpPort,
+		"tls_mode":   "none",
+		"from_email": "safekeep@example.com",
+		"from_name":  "SafeKeep",
+		"to_emails":  []string{"ops@example.com"},
+	})
+	smtpSaveResp.Body.Close()
+	if smtpSaveResp.StatusCode != http.StatusOK {
+		t.Fatalf("save smtp failed: %d", smtpSaveResp.StatusCode)
+	}
+
+	smtpTestResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/settings/smtp/test", nil)
+	smtpTestResp.Body.Close()
+	if smtpTestResp.StatusCode != http.StatusOK {
+		t.Fatalf("test smtp failed: %d", smtpTestResp.StatusCode)
+	}
+
+	// Reset today's counter from earlier test steps and set max_file_size_bytes=50, daily_traffic_limit_bytes=120
+	initReset := env.adminReq(t, http.MethodPost, "/admin/api/v1/circuit-breaker/reset", nil)
+	initReset.Body.Close()
+	curSet, _ := env.store.GetSystemSettings(context.Background())
+	curSet.MaxFileSizeBytes = 50
+	curSet.DailyTrafficLimitBytes = 120
+	if err := env.store.UpdateSystemSettings(context.Background(), curSet, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Oversize upload (80 > 50) -> 413 + alert email
+	overResp := uploadMultipart(t, env.srv.URL+"/api/v1/backups?mode=sync&targets=mock-s3&dedup=false", clOut.APIKey, "huge.bin", bytes.Repeat([]byte("A"), 80))
+	overResp.Body.Close()
+	if overResp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversize upload, got %d", overResp.StatusCode)
+	}
+
+	// Allow up to 80 bytes per file, daily limit stays 120
+	curSet.MaxFileSizeBytes = 80
+	_ = env.store.UpdateSystemSettings(context.Background(), curSet, "test")
+
+	// First upload 70 bytes -> succeeds (used=70 <= 120)
+	ok1 := uploadMultipart(t, env.srv.URL+"/api/v1/backups?mode=sync&targets=mock-s3&dedup=false", clOut.APIKey, "part1.bin", bytes.Repeat([]byte("B"), 70))
+	ok1.Body.Close()
+	if ok1.StatusCode != http.StatusOK {
+		t.Fatalf("expected first 70B upload 200, got %d", ok1.StatusCode)
+	}
+
+	// Second upload 70 bytes -> 70+70=140 > 120 -> 503 circuit breaker tripped + alert email
+	cbResp := uploadMultipart(t, env.srv.URL+"/api/v1/backups?mode=sync&targets=mock-s3&dedup=false", clOut.APIKey, "part2.bin", bytes.Repeat([]byte("C"), 70))
+	cbResp.Body.Close()
+	if cbResp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 circuit_breaker_open, got %d", cbResp.StatusCode)
+	}
+
+	// Third upload 10 bytes -> still 503 while tripped (should NOT send duplicate circuit-breaker email)
+	cbResp2 := uploadMultipart(t, env.srv.URL+"/api/v1/backups?mode=sync&targets=mock-s3&dedup=false", clOut.APIKey, "part3.bin", bytes.Repeat([]byte("D"), 10))
+	cbResp2.Body.Close()
+	if cbResp2.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 while tripped, got %d", cbResp2.StatusCode)
+	}
+
+	// Wait briefly for async alert emails
+	deadlineEmails := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadlineEmails) {
+		smtpMu.Lock()
+		n := len(receivedEmails)
+		smtpMu.Unlock()
+		if n >= 3 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	smtpMu.Lock()
+	emailsCopy := append([]string(nil), receivedEmails...)
+	smtpMu.Unlock()
+	if len(emailsCopy) != 3 {
+		t.Fatalf("expected exactly 3 emails (test, oversize, single circuit-breaker), got %d: %+v", len(emailsCopy), emailsCopy)
+	}
+
+	// Reset circuit breaker via Admin API -> uploads work again
+	rstResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/circuit-breaker/reset", nil)
+	rstResp.Body.Close()
+	if rstResp.StatusCode != http.StatusOK {
+		t.Fatalf("reset circuit breaker failed: %d", rstResp.StatusCode)
+	}
+	okAfterReset := uploadMultipart(t, env.srv.URL+"/api/v1/backups?mode=sync&targets=mock-s3&dedup=false", clOut.APIKey, "part4.bin", bytes.Repeat([]byte("E"), 10))
+	okAfterReset.Body.Close()
+	if okAfterReset.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 after circuit breaker reset, got %d", okAfterReset.StatusCode)
 	}
 }

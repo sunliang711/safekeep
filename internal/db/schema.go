@@ -227,6 +227,13 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY (job_id) REFERENCES cron_jobs(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_cron_runs_job_started ON cron_job_runs(job_id, started_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS daily_traffic (
+			date_key TEXT PRIMARY KEY,
+			bytes_used INTEGER NOT NULL DEFAULT 0,
+			tripped_at DATETIME,
+			notified_at DATETIME,
+			updated_at DATETIME NOT NULL
+		);`,
 	}
 
 	for _, stmt := range stmts {
@@ -240,13 +247,14 @@ func (s *Store) migrate(ctx context.Context) error {
 func (s *Store) seedDefaults(ctx context.Context, defaults config.SystemSettings) error {
 	now := time.Now().UTC()
 	settingsMap := map[string]any{
-		"spool_dir":           defaults.SpoolDir,
-		"max_file_size_bytes": defaults.MaxFileSizeBytes,
-		"max_spool_bytes":     defaults.MaxSpoolBytes,
-		"worker_concurrency":  defaults.WorkerConcurrency,
-		"sync_timeout_sec":    defaults.SyncTimeoutSec,
-		"max_retry_attempts":  defaults.MaxRetryAttempts,
-		"public_base_url":     defaults.PublicBaseURL,
+		"spool_dir":                 defaults.SpoolDir,
+		"max_file_size_bytes":       defaults.MaxFileSizeBytes,
+		"daily_traffic_limit_bytes": defaults.DailyTrafficLimitBytes,
+		"max_spool_bytes":           defaults.MaxSpoolBytes,
+		"worker_concurrency":        defaults.WorkerConcurrency,
+		"sync_timeout_sec":          defaults.SyncTimeoutSec,
+		"max_retry_attempts":        defaults.MaxRetryAttempts,
+		"public_base_url":           defaults.PublicBaseURL,
 	}
 
 	for k, v := range settingsMap {
@@ -262,12 +270,19 @@ func (s *Store) seedDefaults(ctx context.Context, defaults config.SystemSettings
 		}
 	}
 
-	// Migrate legacy system-seeded port 8080 public_base_url to the new default (8333).
+	// Migrate legacy system-seeded port 8080 public_base_url and 512MiB max_file_size_bytes to new defaults.
 	if rawNew, err := json.Marshal(defaults.PublicBaseURL); err == nil {
 		_, _ = s.db.ExecContext(ctx,
 			`UPDATE system_settings SET value_json = ?, updated_at = ?
 			 WHERE key = 'public_base_url' AND value_json = '"http://localhost:8080"' AND updated_by = 'system'`,
 			string(rawNew), now,
+		)
+	}
+	if rawSize, err := json.Marshal(defaults.MaxFileSizeBytes); err == nil {
+		_, _ = s.db.ExecContext(ctx,
+			`UPDATE system_settings SET value_json = ?, updated_at = ?
+			 WHERE key = 'max_file_size_bytes' AND value_json = '536870912' AND updated_by = 'system'`,
+			string(rawSize), now,
 		)
 	}
 

@@ -71,4 +71,10 @@ func TestDefaultPortIs8333(t *testing.T) {
 	if boot.ListenAddr != ":8333" || boot.Defaults.PublicBaseURL != "http://localhost:8333" {
 		t.Fatalf("expected default port 8333, got listen=%q base=%q", boot.ListenAddr, boot.Defaults.PublicBaseURL)
 	}
+	if boot.Defaults.MaxFileSizeBytes != 100*1024*1024 {
+		t.Fatalf("expected default max_file_size_bytes=100MiB, got %d", boot.Defaults.MaxFileSizeBytes)
+	}
+	if boot.Defaults.DailyTrafficLimitBytes != 1024*1024*1024 {
+		t.Fatalf("expected default daily_traffic_limit_bytes=1GiB, got %d", boot.Defaults.DailyTrafficLimitBytes)
+	}
 }

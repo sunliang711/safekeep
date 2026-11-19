@@ -88,7 +88,7 @@ func (s *Server) handleClientUpload(w http.ResponseWriter, r *http.Request) {
 				if !fileFound {
 					filename = part.FileName()
 					contentType = part.Header.Get("Content-Type")
-					sp, sz, sha, spErr := s.backupSvc.SpoolStream(r.Context(), client, part)
+					sp, sz, sha, spErr := s.backupSvc.SpoolStream(r.Context(), client, filename, part)
 					_ = part.Close()
 					if spErr != nil {
 						status := http.StatusInternalServerError

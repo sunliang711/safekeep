@@ -22,6 +22,7 @@ import (
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
 	"safekeep/internal/migration"
+	"safekeep/internal/notify"
 	"safekeep/internal/scheduler"
 )
 
@@ -324,8 +325,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	if strings.TrimSpace(settings.SpoolDir) == "" || settings.WorkerConcurrency <= 0 || settings.SyncTimeoutSec <= 0 {
-		writeError(w, http.StatusBadRequest, "validation_error", "spool_dir, worker_concurrency > 0, and sync_timeout_sec > 0 are required")
+	if strings.TrimSpace(settings.SpoolDir) == "" || settings.WorkerConcurrency <= 0 || settings.SyncTimeoutSec <= 0 || settings.MaxFileSizeBytes <= 0 || settings.DailyTrafficLimitBytes < 0 {
+		writeError(w, http.StatusBadRequest, "validation_error", "spool_dir, max_file_size_bytes > 0, daily_traffic_limit_bytes >= 0, worker_concurrency > 0, and sync_timeout_sec > 0 are required")
 		return
 	}
 	if filepath.Clean(settings.SpoolDir) == filepath.Clean(s.store.DataDir()) {
@@ -348,6 +349,187 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		Detail:       settings,
 	})
 	writeJSON(w, http.StatusOK, settings)
+}
+
+// --- SMTP & Circuit Breaker ---
+
+type smtpDTO struct {
+	Enabled     bool     `json:"enabled"`
+	Host        string   `json:"host"`
+	Port        int      `json:"port"`
+	TLSMode     string   `json:"tls_mode"`
+	Username    string   `json:"username"`
+	HasPassword bool     `json:"has_password"`
+	FromEmail   string   `json:"from_email"`
+	FromName    string   `json:"from_name"`
+	ToEmails    []string `json:"to_emails"`
+}
+
+func toSMTPDTO(c notify.SMTPConfig) smtpDTO {
+	to := c.ToEmails
+	if to == nil {
+		to = []string{}
+	}
+	return smtpDTO{
+		Enabled:     c.Enabled,
+		Host:        c.Host,
+		Port:        c.Port,
+		TLSMode:     c.TLSMode,
+		Username:    c.Username,
+		HasPassword: c.Password != "" || c.PasswordEncrypted != "",
+		FromEmail:   c.FromEmail,
+		FromName:    c.FromName,
+		ToEmails:    to,
+	}
+}
+
+type smtpUpdateReq struct {
+	Enabled       bool     `json:"enabled"`
+	Host          string   `json:"host"`
+	Port          int      `json:"port"`
+	TLSMode       string   `json:"tls_mode"`
+	Username      string   `json:"username"`
+	Password      *string  `json:"password"`
+	ClearPassword bool     `json:"clear_password"`
+	FromEmail     string   `json:"from_email"`
+	FromName      string   `json:"from_name"`
+	ToEmails      []string `json:"to_emails"`
+}
+
+func (s *Server) mergeSMTPRequest(existing notify.SMTPConfig, req smtpUpdateReq) notify.SMTPConfig {
+	cfg := notify.SMTPConfig{
+		Enabled:   req.Enabled,
+		Host:      strings.TrimSpace(req.Host),
+		Port:      req.Port,
+		TLSMode:   strings.ToLower(strings.TrimSpace(req.TLSMode)),
+		Username:  strings.TrimSpace(req.Username),
+		FromEmail: strings.TrimSpace(req.FromEmail),
+		FromName:  strings.TrimSpace(req.FromName),
+		ToEmails:  req.ToEmails,
+	}
+	if cfg.Port == 0 {
+		cfg.Port = 587
+	}
+	if cfg.TLSMode == "" {
+		cfg.TLSMode = "starttls"
+	}
+	if cfg.FromName == "" {
+		cfg.FromName = "SafeKeep"
+	}
+	if req.ClearPassword {
+		cfg.Password = ""
+		cfg.PasswordEncrypted = ""
+	} else if req.Password != nil && *req.Password != "" {
+		cfg.Password = *req.Password
+	} else {
+		cfg.Password = existing.Password
+		cfg.PasswordEncrypted = existing.PasswordEncrypted
+	}
+	return cfg
+}
+
+func (s *Server) handleGetSMTPSettings(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.store.GetSMTPConfig(r.Context(), s.cipher)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get_smtp_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toSMTPDTO(cfg))
+}
+
+func (s *Server) handleUpdateSMTPSettings(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	var req smtpUpdateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	existing, _ := s.store.GetSMTPConfig(r.Context(), s.cipher)
+	cfg := s.mergeSMTPRequest(existing, req)
+	if err := cfg.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_smtp", err.Error())
+		return
+	}
+	if err := s.store.SaveSMTPConfig(r.Context(), s.cipher, cfg, admin.Username); err != nil {
+		writeError(w, http.StatusInternalServerError, "save_smtp_failed", err.Error())
+		return
+	}
+	s.auditLog.Record(r.Context(), audit.Event{
+		ActorType:    "admin",
+		ActorID:      admin.ID,
+		ActorName:    admin.Username,
+		Action:       "settings.smtp_update",
+		ResourceType: "smtp_config",
+		IPAddress:    clientIP(r),
+		UserAgent:    r.UserAgent(),
+		RequestID:    middleware.GetReqID(r.Context()),
+		Detail:       toSMTPDTO(cfg),
+	})
+	saved, _ := s.store.GetSMTPConfig(r.Context(), s.cipher)
+	writeJSON(w, http.StatusOK, toSMTPDTO(saved))
+}
+
+func (s *Server) handleTestSMTPSettings(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	existing, err := s.store.GetSMTPConfig(r.Context(), s.cipher)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get_smtp_failed", err.Error())
+		return
+	}
+
+	cfg := existing
+	var req smtpUpdateReq
+	if r.Body != nil {
+		decErr := json.NewDecoder(r.Body).Decode(&req)
+		if decErr == nil {
+			cfg = s.mergeSMTPRequest(existing, req)
+			cfg.Enabled = true
+		} else if !errors.Is(decErr, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid_json", decErr.Error())
+			return
+		}
+	}
+	cfg.Enabled = true
+
+	sendErr := notify.Send(r.Context(), cfg, "[SafeKeep] SMTP 测试邮件", fmt.Sprintf("这是一封来自 SafeKeep 的 SMTP 测试邮件。\n\n触发管理员: %s\n时间: %s\n", admin.Username, time.Now().Format(time.RFC3339)))
+	s.auditLog.Record(r.Context(), audit.Event{
+		ActorType:    "admin",
+		ActorID:      admin.ID,
+		ActorName:    admin.Username,
+		Action:       "settings.smtp_test",
+		ResourceType: "smtp_config",
+		Status:       map[bool]string{true: "success", false: "failure"}[sendErr == nil],
+		IPAddress:    clientIP(r),
+		Detail:       map[string]any{"host": cfg.Host, "port": cfg.Port, "to": cfg.ToEmails},
+	})
+	if sendErr != nil {
+		writeError(w, http.StatusBadGateway, "smtp_test_failed", sendErr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleResetCircuitBreaker(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	dateKey := db.TodayDateKey()
+	if err := s.store.ResetDailyCircuitBreaker(r.Context(), dateKey); err != nil {
+		writeError(w, http.StatusInternalServerError, "reset_failed", err.Error())
+		return
+	}
+	settings, _ := s.store.GetSystemSettings(r.Context())
+	dt, _ := s.store.GetDailyTraffic(r.Context(), dateKey, settings.DailyTrafficLimitBytes)
+	s.auditLog.Record(r.Context(), audit.Event{
+		ActorType:    "admin",
+		ActorID:      admin.ID,
+		ActorName:    admin.Username,
+		Action:       "circuit_breaker.reset",
+		ResourceType: "daily_traffic",
+		ResourceID:   dateKey,
+		IPAddress:    clientIP(r),
+		UserAgent:    r.UserAgent(),
+		RequestID:    middleware.GetReqID(r.Context()),
+	})
+	writeJSON(w, http.StatusOK, dt)
 }
 
 func (s *Server) handleListAdmins(w http.ResponseWriter, r *http.Request) {

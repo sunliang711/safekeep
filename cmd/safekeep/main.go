@@ -79,6 +79,18 @@ func main() {
 		}
 		settings = overridden
 	}
+	if boot.HasSMTPSection {
+		existingSMTP, err := store.GetSMTPConfig(context.Background(), cipher)
+		if err == nil {
+			_, envSMTP := config.ApplySMTPEnvOverrides(existingSMTP)
+			if envSMTP {
+				merged, _ := config.ApplySMTPEnvOverrides(existingSMTP)
+				_ = store.SaveSMTPConfig(context.Background(), cipher, merged, "env")
+			} else if !existingSMTP.Enabled && existingSMTP.Host == "" && boot.SMTPDefaults.Host != "" {
+				_ = store.SaveSMTPConfig(context.Background(), cipher, boot.SMTPDefaults, "config")
+			}
+		}
+	}
 	_ = os.MkdirAll(settings.SpoolDir, 0o750)
 
 	appCtx, cancel := context.WithCancel(context.Background())
@@ -90,6 +102,7 @@ func main() {
 
 	auditLog := audit.NewLogger(store)
 	backupSvc := backup.NewService(appCtx, store, cipher, registry)
+	backupSvc.SetAuditLogger(auditLog)
 	pool := queue.NewWorkerPool(store, backupSvc, settings.WorkerConcurrency, logger)
 	backupSvc.SetEnqueuer(pool)
 	pool.Start(appCtx)

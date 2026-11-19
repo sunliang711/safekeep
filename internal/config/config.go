@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"safekeep/internal/notify"
 )
 
 const DefaultListenAddr = ":8333"
@@ -25,6 +27,8 @@ type BootstrapConfig struct {
 	MasterKeyHex       string
 	CORSAllowedOrigins []string
 	Defaults           SystemSettings
+	SMTPDefaults       notify.SMTPConfig
+	HasSMTPSection     bool
 }
 
 // FileConfig maps the config.toml file structure.
@@ -36,37 +40,41 @@ type FileConfig struct {
 		CORSAllowedOrigins []string `toml:"cors_allowed_origins"`
 	} `toml:"server"`
 	Defaults struct {
-		PublicBaseURL     string `toml:"public_base_url"`
-		SpoolDir          string `toml:"spool_dir"`
-		MaxFileSizeBytes  int64  `toml:"max_file_size_bytes"`
-		MaxSpoolBytes     int64  `toml:"max_spool_bytes"`
-		WorkerConcurrency int    `toml:"worker_concurrency"`
-		SyncTimeoutSec    int    `toml:"sync_timeout_sec"`
-		MaxRetryAttempts  int    `toml:"max_retry_attempts"`
+		PublicBaseURL          string `toml:"public_base_url"`
+		SpoolDir               string `toml:"spool_dir"`
+		MaxFileSizeBytes       int64  `toml:"max_file_size_bytes"`
+		DailyTrafficLimitBytes int64  `toml:"daily_traffic_limit_bytes"`
+		MaxSpoolBytes          int64  `toml:"max_spool_bytes"`
+		WorkerConcurrency      int    `toml:"worker_concurrency"`
+		SyncTimeoutSec         int    `toml:"sync_timeout_sec"`
+		MaxRetryAttempts       int    `toml:"max_retry_attempts"`
 	} `toml:"defaults"`
+	SMTP notify.SMTPConfig `toml:"smtp"`
 }
 
 // SystemSettings holds dynamic runtime settings managed via the Web UI and stored in SQLite.
 type SystemSettings struct {
-	SpoolDir          string `json:"spool_dir"`
-	MaxFileSizeBytes  int64  `json:"max_file_size_bytes"`
-	MaxSpoolBytes     int64  `json:"max_spool_bytes"`
-	WorkerConcurrency int    `json:"worker_concurrency"`
-	SyncTimeoutSec    int    `json:"sync_timeout_sec"`
-	MaxRetryAttempts  int    `json:"max_retry_attempts"`
-	PublicBaseURL     string `json:"public_base_url"`
+	SpoolDir               string `json:"spool_dir"`
+	MaxFileSizeBytes       int64  `json:"max_file_size_bytes"`
+	DailyTrafficLimitBytes int64  `json:"daily_traffic_limit_bytes"`
+	MaxSpoolBytes          int64  `json:"max_spool_bytes"`
+	WorkerConcurrency      int    `json:"worker_concurrency"`
+	SyncTimeoutSec         int    `json:"sync_timeout_sec"`
+	MaxRetryAttempts       int    `json:"max_retry_attempts"`
+	PublicBaseURL          string `json:"public_base_url"`
 }
 
 // DefaultSystemSettings returns sensible out-of-the-box settings for the given data directory.
 func DefaultSystemSettings(dataDir string) SystemSettings {
 	return SystemSettings{
-		SpoolDir:          filepath.Join(dataDir, "spool"),
-		MaxFileSizeBytes:  512 * 1024 * 1024,        // 512 MiB
-		MaxSpoolBytes:     10 * 1024 * 1024 * 1024, // 10 GiB
-		WorkerConcurrency: 4,
-		SyncTimeoutSec:    60,
-		MaxRetryAttempts:  3,
-		PublicBaseURL:     DefaultPublicBaseURL,
+		SpoolDir:               filepath.Join(dataDir, "spool"),
+		MaxFileSizeBytes:       100 * 1024 * 1024,       // 100 MiB
+		DailyTrafficLimitBytes: 1024 * 1024 * 1024,      // 1 GiB
+		MaxSpoolBytes:          10 * 1024 * 1024 * 1024, // 10 GiB
+		WorkerConcurrency:      4,
+		SyncTimeoutSec:         60,
+		MaxRetryAttempts:       3,
+		PublicBaseURL:          DefaultPublicBaseURL,
 	}
 }
 
@@ -153,6 +161,9 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 	if fc.Defaults.MaxFileSizeBytes > 0 {
 		defaults.MaxFileSizeBytes = fc.Defaults.MaxFileSizeBytes
 	}
+	if fc.Defaults.DailyTrafficLimitBytes > 0 {
+		defaults.DailyTrafficLimitBytes = fc.Defaults.DailyTrafficLimitBytes
+	}
 	if fc.Defaults.MaxSpoolBytes > 0 {
 		defaults.MaxSpoolBytes = fc.Defaults.MaxSpoolBytes
 	}
@@ -168,6 +179,20 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 
 	defaults, _ = ApplyEnvOverrides(defaults)
 	boot.Defaults = defaults
+
+	smtpCfg := fc.SMTP
+	if smtpCfg.Port == 0 {
+		smtpCfg.Port = 587
+	}
+	if smtpCfg.TLSMode == "" {
+		smtpCfg.TLSMode = "starttls"
+	}
+	if smtpCfg.FromName == "" {
+		smtpCfg.FromName = "SafeKeep"
+	}
+	smtpCfg, smtpChanged := ApplySMTPEnvOverrides(smtpCfg)
+	boot.SMTPDefaults = smtpCfg
+	boot.HasSMTPSection = smtpChanged || smtpCfg.Enabled || smtpCfg.Host != ""
 	return boot, nil
 }
 
@@ -186,6 +211,12 @@ func ApplyEnvOverrides(s SystemSettings) (SystemSettings, bool) {
 	if v, ok := os.LookupEnv("SAFEKEEP_MAX_FILE_SIZE_BYTES"); ok {
 		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n > 0 {
 			s.MaxFileSizeBytes = n
+			changed = true
+		}
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_DAILY_TRAFFIC_LIMIT_BYTES"); ok {
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n >= 0 {
+			s.DailyTrafficLimitBytes = n
 			changed = true
 		}
 	}
@@ -214,6 +245,50 @@ func ApplyEnvOverrides(s SystemSettings) (SystemSettings, bool) {
 		}
 	}
 	return s, changed
+}
+
+// ApplySMTPEnvOverrides applies SAFEKEEP_SMTP_* environment variables onto SMTPConfig.
+func ApplySMTPEnvOverrides(c notify.SMTPConfig) (notify.SMTPConfig, bool) {
+	changed := false
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_ENABLED"); ok {
+		c.Enabled = strings.EqualFold(strings.TrimSpace(v), "true") || strings.TrimSpace(v) == "1"
+		changed = true
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_HOST"); ok && strings.TrimSpace(v) != "" {
+		c.Host = strings.TrimSpace(v)
+		changed = true
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_PORT"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			c.Port = n
+			changed = true
+		}
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_TLS_MODE"); ok && strings.TrimSpace(v) != "" {
+		c.TLSMode = strings.ToLower(strings.TrimSpace(v))
+		changed = true
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_USERNAME"); ok {
+		c.Username = strings.TrimSpace(v)
+		changed = true
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_PASSWORD"); ok {
+		c.Password = v
+		changed = true
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_FROM_EMAIL"); ok && strings.TrimSpace(v) != "" {
+		c.FromEmail = strings.TrimSpace(v)
+		changed = true
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_FROM_NAME"); ok && strings.TrimSpace(v) != "" {
+		c.FromName = strings.TrimSpace(v)
+		changed = true
+	}
+	if v, ok := os.LookupEnv("SAFEKEEP_SMTP_TO_EMAILS"); ok {
+		c.ToEmails = parseCSV(v)
+		changed = true
+	}
+	return c, changed
 }
 
 func parseCSV(s string) []string {
