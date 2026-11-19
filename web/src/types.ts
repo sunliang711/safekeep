@@ -1,0 +1,191 @@
+export interface Admin {
+  id: string;
+  username: string;
+  is_active: boolean;
+  last_login_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Upstream {
+  id: string;
+  name: string;
+  type: 's3' | 'dropbox';
+  enabled: boolean;
+  config: Record<string, any>;
+  proxy_enabled: boolean;
+  proxy_type: 'http' | 'https' | 'socks5' | '';
+  proxy_host: string;
+  proxy_port: number;
+  proxy_username?: string;
+  has_proxy_password: boolean;
+  last_test_status: 'untested' | 'ok' | 'failed';
+  last_test_error?: string;
+  last_tested_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClientUpstream {
+  client_id?: string;
+  upstream_id: string;
+  upstream_name?: string;
+  upstream_type?: string;
+  enabled?: boolean;
+  is_default: boolean;
+  priority: number;
+}
+
+export interface Client {
+  id: string;
+  name: string;
+  description: string;
+  key_prefix: string;
+  enabled: boolean;
+  default_mode: 'sync' | 'async';
+  path_prefix: string;
+  max_file_size_bytes: number;
+  allowed_mime_types: string[];
+  rate_limit_rpm: number;
+  webhook_url: string;
+  has_webhook_secret: boolean;
+  expires_at?: string;
+  last_used_at?: string;
+  created_at: string;
+  updated_at: string;
+  upstreams: ClientUpstream[];
+}
+
+export interface BackupTaskItem {
+  id: string;
+  task_id: string;
+  upstream_id: string;
+  upstream_name: string;
+  upstream_type: string;
+  remote_path: string;
+  remote_etag?: string;
+  remote_version_id?: string;
+  status: 'pending' | 'running' | 'succeeded' | 'failed';
+  attempt_count: number;
+  max_attempts: number;
+  next_retry_at?: string;
+  duration_ms: number;
+  error_message?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface BackupTask {
+  id: string;
+  client_id: string;
+  client_name?: string;
+  idempotency_key?: string;
+  mode: 'sync' | 'async';
+  status: 'pending' | 'running' | 'partial_success' | 'succeeded' | 'failed';
+  original_filename: string;
+  content_type: string;
+  file_size: number;
+  sha256: string;
+  spool_cleaned: boolean;
+  custom_subpath?: string;
+  metadata_json?: string;
+  deduplicated: boolean;
+  webhook_status: string;
+  error_summary?: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  items?: BackupTaskItem[];
+}
+
+export interface CronJob {
+  id: string;
+  job_key: string;
+  name: string;
+  description: string;
+  cron_expr: string;
+  enabled: boolean;
+  config_json: string;
+  last_run_at?: string;
+  last_status: string;
+  last_duration_ms: number;
+  last_summary?: string;
+  next_run_at?: string;
+  updated_at: string;
+}
+
+export interface CronJobRun {
+  id: string;
+  job_id: string;
+  trigger_type: 'schedule' | 'manual';
+  triggered_by: string;
+  status: 'running' | 'succeeded' | 'failed';
+  affected_rows: number;
+  output_log: string;
+  started_at: string;
+  finished_at?: string;
+}
+
+export interface AuditLog {
+  id: number;
+  actor_type: 'admin' | 'client' | 'system';
+  actor_id: string;
+  actor_name: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  status: 'success' | 'failure';
+  ip_address: string;
+  user_agent: string;
+  request_id: string;
+  detail_json: string;
+  created_at: string;
+}
+
+export interface SystemSettings {
+  spool_dir: string;
+  max_file_size_bytes: number;
+  max_spool_bytes: number;
+  worker_concurrency: number;
+  sync_timeout_sec: number;
+  max_retry_attempts: number;
+  public_base_url: string;
+}
+
+export interface DashboardSummary {
+  total_tasks: number;
+  succeeded_tasks: number;
+  failed_tasks: number;
+  pending_tasks: number;
+  total_bytes_backed: number;
+  deduplicated_tasks: number;
+  enabled_upstreams: number;
+  healthy_upstreams: number;
+  enabled_clients: number;
+  spool_bytes_used: number;
+  recent_tasks: BackupTask[];
+  upstreams: Upstream[];
+}
+
+export interface InspectSummary {
+  format_version: number;
+  exported_at: string;
+  includes: {
+    tasks: boolean;
+    admins: boolean;
+    audit_logs: boolean;
+  };
+  counts: {
+    system_settings: number;
+    upstreams: number;
+    clients: number;
+    client_upstreams: number;
+    cron_jobs: number;
+    admins: number;
+    backup_tasks: number;
+    audit_logs: number;
+  };
+  upstream_conflicts: string[];
+  client_conflicts: string[];
+  admin_conflicts: string[];
+}
