@@ -275,23 +275,48 @@ export const UpstreamsPage: React.FC = () => {
                   <>
                     <div>授权状态: {u.config.authorized ? <span className="text-emerald-700 font-medium">已授权 ({u.config.account_email || '已连接'})</span> : <span className="text-amber-700">未授权</span>}</div>
                     <div>根目录: <span className="font-mono">{u.config.root_path || '/'}</span></div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span>OAuth 回调 URI:</span>
-                      <code className="font-mono bg-white px-1.5 py-0.5 rounded border text-[11px] break-all">
-                        {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
-                          setMsg({ type: 'ok', text: '已复制 Dropbox Redirect URI，请确保已添加到 Dropbox App Console -> OAuth 2 -> Redirect URIs。' })
-                        }}
-                        className="text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-0.5"
-                        title="复制回调地址"
-                      >
-                        <Copy className="w-3 h-3" />
-                      </button>
-                    </div>
+                    {!u.config.authorized ? (
+                      <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 space-y-1">
+                        <div className="font-medium">授权前请先配置 Dropbox 回调地址：</div>
+                        <div className="text-[11px] text-amber-800">
+                          前往 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b>，添加并保存以下地址（非 <code className="font-mono">localhost</code>/<code className="font-mono">127.0.0.1</code> 地址需使用 <code className="font-mono">https://</code>）：
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-amber-200 text-[11px] break-all">
+                            {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
+                              setMsg({ type: 'ok', text: '已复制回调地址，请粘贴并保存到 Dropbox App Console -> OAuth 2 -> Redirect URIs 后再点击授权。' })
+                            }}
+                            className="text-amber-800 hover:text-amber-950 inline-flex items-center gap-0.5 font-medium"
+                            title="复制回调地址"
+                          >
+                            <Copy className="w-3 h-3" /> 复制
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>OAuth 回调 URI:</span>
+                        <code className="font-mono bg-white px-1.5 py-0.5 rounded border text-[11px] break-all">
+                          {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
+                            setMsg({ type: 'ok', text: '已复制 Dropbox Redirect URI。' })
+                          }}
+                          className="text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-0.5"
+                          title="复制回调地址"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
                 <div>
@@ -450,7 +475,9 @@ export const UpstreamsPage: React.FC = () => {
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-900 space-y-1">
-                    <div>请在 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b> 中添加以下回调地址：</div>
+                    <div>
+                      授权前请先前往 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b>，添加并保存以下回调地址：
+                    </div>
                     <div className="flex items-center gap-2">
                       <code className="font-mono bg-white px-2 py-0.5 rounded border text-[11px] break-all">
                         {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
@@ -462,6 +489,9 @@ export const UpstreamsPage: React.FC = () => {
                       >
                         <Copy className="w-3.5 h-3.5" /> 复制
                       </button>
+                    </div>
+                    <div className="text-[11px] text-sky-700">
+                      注意：Dropbox 仅对 <code className="font-mono">localhost</code> / <code className="font-mono">127.0.0.1</code> 允许 <code className="font-mono">http://</code>，局域网 IP 或域名必须使用 <code className="font-mono">https://</code>。
                     </div>
                   </div>
                 </div>
