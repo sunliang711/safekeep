@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -365,6 +366,13 @@ type smtpDTO struct {
 	ToEmails    []string `json:"to_emails"`
 }
 
+// smtpAdminDTO is returned only to authenticated admin UI requests so the
+// saved authorization code can be copied while audit logs stay redacted.
+type smtpAdminDTO struct {
+	smtpDTO
+	Password string `json:"password,omitempty"`
+}
+
 func toSMTPDTO(c notify.SMTPConfig) smtpDTO {
 	to := c.ToEmails
 	if to == nil {
@@ -380,6 +388,13 @@ func toSMTPDTO(c notify.SMTPConfig) smtpDTO {
 		FromEmail:   c.FromEmail,
 		FromName:    c.FromName,
 		ToEmails:    to,
+	}
+}
+
+func toSMTPAdminDTO(c notify.SMTPConfig) smtpAdminDTO {
+	return smtpAdminDTO{
+		smtpDTO:  toSMTPDTO(c),
+		Password: c.Password,
 	}
 }
 
@@ -434,7 +449,7 @@ func (s *Server) handleGetSMTPSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get_smtp_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toSMTPDTO(cfg))
+	writeJSON(w, http.StatusOK, toSMTPAdminDTO(cfg))
 }
 
 func (s *Server) handleUpdateSMTPSettings(w http.ResponseWriter, r *http.Request) {
@@ -466,7 +481,7 @@ func (s *Server) handleUpdateSMTPSettings(w http.ResponseWriter, r *http.Request
 		Detail:       toSMTPDTO(cfg),
 	})
 	saved, _ := s.store.GetSMTPConfig(r.Context(), s.cipher)
-	writeJSON(w, http.StatusOK, toSMTPDTO(saved))
+	writeJSON(w, http.StatusOK, toSMTPAdminDTO(saved))
 }
 
 func (s *Server) handleTestSMTPSettings(w http.ResponseWriter, r *http.Request) {
@@ -491,7 +506,13 @@ func (s *Server) handleTestSMTPSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg.Enabled = true
 
-	sendErr := notify.Send(r.Context(), cfg, "[SafeKeep] SMTP 测试邮件", fmt.Sprintf("这是一封来自 SafeKeep 的 SMTP 测试邮件。\n\n触发管理员: %s\n时间: %s\n", admin.Username, time.Now().Format(time.RFC3339)))
+	sendCtx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	sendErr := notify.Send(sendCtx, cfg, "[SafeKeep] SMTP 测试邮件", fmt.Sprintf("这是一封来自 SafeKeep 的 SMTP 测试邮件。\n\n触发管理员: %s\n时间: %s\n", admin.Username, time.Now().Format(time.RFC3339)))
+	detail := map[string]any{"host": cfg.Host, "port": cfg.Port, "to": cfg.ToEmails}
+	if sendErr != nil {
+		detail["error"] = sendErr.Error()
+	}
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
 		ActorID:      admin.ID,
@@ -500,13 +521,18 @@ func (s *Server) handleTestSMTPSettings(w http.ResponseWriter, r *http.Request) 
 		ResourceType: "smtp_config",
 		Status:       map[bool]string{true: "success", false: "failure"}[sendErr == nil],
 		IPAddress:    clientIP(r),
-		Detail:       map[string]any{"host": cfg.Host, "port": cfg.Port, "to": cfg.ToEmails},
+		Detail:       detail,
 	})
 	if sendErr != nil {
 		writeError(w, http.StatusBadGateway, "smtp_test_failed", sendErr.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"host":   cfg.Host,
+		"port":   cfg.Port,
+		"to":     cfg.ToEmails,
+	})
 }
 
 func (s *Server) handleResetCircuitBreaker(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Mail, SlidersHorizontal, Users } from 'lucide-react'
+import { Check, CheckCircle2, Copy, Eye, EyeOff, Loader2, Mail, SlidersHorizontal, Users, XCircle } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import type { Admin, SystemSettings } from '../types'
@@ -19,12 +19,17 @@ export const SettingsPage: React.FC = () => {
   const [smtpTLSMode, setSmtpTLSMode] = useState<'starttls' | 'tls' | 'none'>('starttls')
   const [smtpUsername, setSmtpUsername] = useState('')
   const [smtpPassword, setSmtpPassword] = useState('')
+  const [smtpSavedPassword, setSmtpSavedPassword] = useState('')
   const [smtpHasPassword, setSmtpHasPassword] = useState(false)
+  const [smtpEditingPwd, setSmtpEditingPwd] = useState(false)
+  const [smtpShowPwd, setSmtpShowPwd] = useState(false)
+  const [smtpPwdCopied, setSmtpPwdCopied] = useState(false)
   const [smtpClearPassword, setSmtpClearPassword] = useState(false)
   const [smtpFromEmail, setSmtpFromEmail] = useState('')
   const [smtpFromName, setSmtpFromName] = useState('SafeKeep')
   const [smtpToEmails, setSmtpToEmails] = useState('')
   const [smtpTesting, setSmtpTesting] = useState(false)
+  const [smtpTestResult, setSmtpTestResult] = useState<{ ok: boolean; message: string; time: string } | null>(null)
 
   // Admins state
   const [newAdminUser, setNewAdminUser] = useState('')
@@ -47,7 +52,10 @@ export const SettingsPage: React.FC = () => {
       setSmtpTLSMode(smtp.tls_mode || 'starttls')
       setSmtpUsername(smtp.username || '')
       setSmtpHasPassword(smtp.has_password)
+      setSmtpSavedPassword(smtp.password || '')
       setSmtpPassword('')
+      setSmtpEditingPwd(false)
+      setSmtpShowPwd(false)
       setSmtpClearPassword(false)
       setSmtpFromEmail(smtp.from_email || '')
       setSmtpFromName(smtp.from_name || 'SafeKeep')
@@ -89,7 +97,7 @@ export const SettingsPage: React.FC = () => {
     port: Number(smtpPort),
     tls_mode: smtpTLSMode,
     username: smtpUsername,
-    ...(smtpClearPassword ? { clear_password: true } : smtpPassword !== '' ? { password: smtpPassword } : {}),
+    ...(smtpClearPassword ? { clear_password: true } : smtpEditingPwd && smtpPassword !== '' ? { password: smtpPassword } : {}),
     from_email: smtpFromEmail,
     from_name: smtpFromName,
     to_emails: smtpToEmails
@@ -105,7 +113,10 @@ export const SettingsPage: React.FC = () => {
     try {
       const updated = await api.updateSMTP(smtpPayload())
       setSmtpHasPassword(updated.has_password)
+      setSmtpSavedPassword(updated.password || '')
       setSmtpPassword('')
+      setSmtpEditingPwd(false)
+      setSmtpShowPwd(false)
       setSmtpClearPassword(false)
       setMsg('SMTP 邮件告警配置已保存')
     } catch (e: any) {
@@ -113,15 +124,31 @@ export const SettingsPage: React.FC = () => {
     }
   }
 
+  const copySmtpPassword = () => {
+    const valueToCopy = smtpEditingPwd && smtpPassword !== '' ? smtpPassword : smtpSavedPassword
+    if (!valueToCopy) return
+    navigator.clipboard?.writeText(valueToCopy)
+    setSmtpPwdCopied(true)
+    setTimeout(() => setSmtpPwdCopied(false), 1500)
+  }
+
   const testSMTP = async () => {
     setMsg('')
     setErr('')
+    setSmtpTestResult(null)
     setSmtpTesting(true)
+    const nowText = new Date().toLocaleTimeString()
     try {
-      await api.testSMTP(smtpPayload())
-      setMsg('测试邮件发送成功，请检查收件箱！')
+      const res = await api.testSMTP(smtpPayload())
+      const targetText = res.to && res.to.length > 0 ? res.to.join(', ') : smtpToEmails || '配置收件人'
+      const serverText = res.host ? `${res.host}:${res.port || smtpPort}` : `${smtpHost}:${smtpPort}`
+      const successMsg = `测试邮件发送成功！已发送至 ${targetText}（${serverText}）`
+      setSmtpTestResult({ ok: true, message: successMsg, time: nowText })
+      setMsg(successMsg)
     } catch (e: any) {
-      setErr(`测试邮件发送失败: ${e.message}`)
+      const failMsg = `测试邮件发送失败：${e.message || '未知错误'}`
+      setSmtpTestResult({ ok: false, message: failMsg, time: nowText })
+      setErr(failMsg)
     } finally {
       setSmtpTesting(false)
     }
@@ -386,15 +413,78 @@ export const SettingsPage: React.FC = () => {
                       </div>
                       <div>
                         <label className="block text-xs text-slate-600 mb-1">
-                          SMTP 密码/授权码 {smtpHasPassword ? '（已配置，留空保持不变）' : ''}
+                          SMTP 密码/授权码 {smtpHasPassword ? '（已配置，默认掩码显示 *****）' : ''}
                         </label>
-                        <input
-                          type="password"
-                          disabled={smtpClearPassword}
-                          value={smtpPassword}
-                          onChange={(e) => setSmtpPassword(e.target.value)}
-                          className="w-full px-3 py-1.5 border rounded-lg disabled:bg-slate-100"
-                        />
+                        <div className="flex items-center gap-1.5">
+                          <div className="relative flex-1">
+                            <input
+                              type={
+                                smtpEditingPwd
+                                  ? smtpShowPwd
+                                    ? 'text'
+                                    : 'password'
+                                  : 'text'
+                              }
+                              disabled={smtpClearPassword}
+                              value={
+                                smtpClearPassword
+                                  ? ''
+                                  : smtpEditingPwd
+                                  ? smtpPassword
+                                  : smtpHasPassword
+                                  ? smtpShowPwd
+                                    ? smtpSavedPassword
+                                    : '*****'
+                                  : smtpPassword
+                              }
+                              placeholder={smtpHasPassword ? '输入新密码/授权码（留空保持不变）' : '请输入 SMTP 密码或授权码'}
+                              onFocus={() => {
+                                if (!smtpClearPassword && smtpHasPassword && !smtpEditingPwd) {
+                                  setSmtpEditingPwd(true)
+                                  setSmtpPassword('')
+                                }
+                              }}
+                              onBlur={() => {
+                                if (smtpEditingPwd && smtpPassword === '' && smtpHasPassword) {
+                                  setSmtpEditingPwd(false)
+                                }
+                              }}
+                              onChange={(e) => {
+                                if (!smtpEditingPwd) setSmtpEditingPwd(true)
+                                setSmtpPassword(e.target.value)
+                              }}
+                              className="w-full px-3 py-1.5 pr-8 border rounded-lg font-mono text-xs disabled:bg-slate-100"
+                            />
+                            <button
+                              type="button"
+                              disabled={smtpClearPassword || (!smtpHasPassword && smtpPassword === '')}
+                              onClick={() => setSmtpShowPwd((v) => !v)}
+                              title={smtpShowPwd ? '隐藏授权码' : '查看授权码'}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 disabled:opacity-30"
+                            >
+                              {smtpShowPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={smtpClearPassword || (!smtpSavedPassword && smtpPassword === '')}
+                            onClick={copySmtpPassword}
+                            title="复制 SMTP 密码/授权码"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-40 rounded-lg text-xs text-slate-700 shrink-0"
+                          >
+                            {smtpPwdCopied ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                <span className="text-emerald-700">已复制</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>复制</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                         {smtpHasPassword && (
                           <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
                             <input
@@ -403,6 +493,8 @@ export const SettingsPage: React.FC = () => {
                               onChange={(e) => {
                                 setSmtpClearPassword(e.target.checked)
                                 setSmtpPassword('')
+                                setSmtpEditingPwd(false)
+                                setSmtpShowPwd(false)
                               }}
                             />
                             <span>清除已有 SMTP 密码</span>
@@ -437,12 +529,39 @@ export const SettingsPage: React.FC = () => {
                         />
                       </div>
                     </div>
+                    {smtpTesting && (
+                      <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 text-xs flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
+                        <span>正在连接 SMTP 服务器并发送测试邮件，请稍候...</span>
+                      </div>
+                    )}
+
+                    {smtpTestResult && (
+                      <div
+                        className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${
+                          smtpTestResult.ok
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                            : 'bg-rose-50 border-rose-200 text-rose-800'
+                        }`}
+                      >
+                        {smtpTestResult.ok ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium break-all">{smtpTestResult.message}</div>
+                          <div className="opacity-75 mt-0.5">检测时间：{smtpTestResult.time}</div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex justify-end gap-2 pt-2 border-t">
                       <button
                         type="button"
                         onClick={testSMTP}
                         disabled={smtpTesting}
-                        className="px-4 py-2 border border-slate-300 hover:bg-slate-50 rounded-lg text-sm"
+                        className="px-4 py-2 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 rounded-lg text-sm"
                       >
                         {smtpTesting ? '发送中...' : '发送测试邮件'}
                       </button>

@@ -573,11 +573,13 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	smtpHost, smtpPortStr, _ := net.SplitHostPort(smtpLn.Addr().String())
 	smtpPort, _ := strconv.Atoi(smtpPortStr)
 
+	const smtpAuthSecret = "smtp-auth-secret-code"
 	smtpSaveResp := env.adminReq(t, http.MethodPut, "/admin/api/v1/settings/smtp", map[string]any{
 		"enabled":    true,
 		"host":       smtpHost,
 		"port":       smtpPort,
 		"tls_mode":   "none",
+		"password":   smtpAuthSecret,
 		"from_email": "safekeep@example.com",
 		"from_name":  "SafeKeep",
 		"to_emails":  []string{"ops@example.com"},
@@ -587,10 +589,49 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 		t.Fatalf("save smtp failed: %d", smtpSaveResp.StatusCode)
 	}
 
+	smtpGetResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/settings/smtp", nil)
+	var smtpGetOut struct {
+		HasPassword bool   `json:"has_password"`
+		Password    string `json:"password"`
+	}
+	if err := json.NewDecoder(smtpGetResp.Body).Decode(&smtpGetOut); err != nil {
+		t.Fatal(err)
+	}
+	smtpGetResp.Body.Close()
+	if !smtpGetOut.HasPassword || smtpGetOut.Password != smtpAuthSecret {
+		t.Fatalf("expected admin smtp GET to return password for copy, got has=%v pwd=%q", smtpGetOut.HasPassword, smtpGetOut.Password)
+	}
+	auditItems, _, err := env.store.ListAuditLogs(context.Background(), db.AuditFilter{Action: "settings.smtp_update", Limit: 5})
+	if err != nil || len(auditItems) == 0 {
+		t.Fatalf("expected settings.smtp_update audit log: %v", err)
+	}
+	if strings.Contains(auditItems[0].DetailJSON, smtpAuthSecret) {
+		t.Fatalf("audit log must not store plaintext smtp password: %s", auditItems[0].DetailJSON)
+	}
+
 	smtpTestResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/settings/smtp/test", nil)
+	var smtpTestOut struct {
+		Status string   `json:"status"`
+		To     []string `json:"to"`
+	}
+	if err := json.NewDecoder(smtpTestResp.Body).Decode(&smtpTestOut); err != nil {
+		t.Fatal(err)
+	}
 	smtpTestResp.Body.Close()
-	if smtpTestResp.StatusCode != http.StatusOK {
-		t.Fatalf("test smtp failed: %d", smtpTestResp.StatusCode)
+	if smtpTestResp.StatusCode != http.StatusOK || smtpTestOut.Status != "ok" || len(smtpTestOut.To) != 1 {
+		t.Fatalf("test smtp failed: status=%d out=%+v", smtpTestResp.StatusCode, smtpTestOut)
+	}
+
+	smtpFailResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/settings/smtp/test", map[string]any{
+		"host":       "127.0.0.1",
+		"port":       1,
+		"tls_mode":   "none",
+		"from_email": "safekeep@example.com",
+		"to_emails":  []string{"ops@example.com"},
+	})
+	smtpFailResp.Body.Close()
+	if smtpFailResp.StatusCode == http.StatusOK {
+		t.Fatalf("expected unreachable smtp test to fail")
 	}
 
 	// Reset today's counter from earlier test steps and set max_file_size_bytes=50, daily_traffic_limit_bytes=120

@@ -160,6 +160,7 @@ export interface SMTPConfig {
   tls_mode: 'starttls' | 'tls' | 'none';
   username: string;
   has_password: boolean;
+  password?: string;
   from_email: string;
   from_name: string;
   to_emails: string[];

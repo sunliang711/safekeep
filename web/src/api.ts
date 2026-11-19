@@ -115,7 +115,7 @@ export const api = {
   updateSMTP: (payload: any) =>
     req<SMTPConfig>('/admin/api/v1/settings/smtp', { method: 'PUT', body: JSON.stringify(payload) }),
   testSMTP: (payload?: any) =>
-    req<{ status: string }>('/admin/api/v1/settings/smtp/test', {
+    req<{ status: string; host?: string; port?: number; to?: string[] }>('/admin/api/v1/settings/smtp/test', {
       method: 'POST',
       ...(payload ? { body: JSON.stringify(payload) } : {}),
     }),
