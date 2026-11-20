@@ -5,10 +5,12 @@ import type { Admin } from '../types'
 
 interface Props {
   mode: 'setup' | 'login'
+  version?: string
   onSuccess: (admin: Admin) => void
 }
 
-export const AuthPage: React.FC<Props> = ({ mode, onSuccess }) => {
+export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) => {
+  const versionLabel = version && version !== 'dev' && !version.startsWith('v') ? `v${version}` : version || 'dev'
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -46,7 +48,7 @@ export const AuthPage: React.FC<Props> = ({ mode, onSuccess }) => {
           <p className="text-slate-400 text-sm leading-7 mt-6">连接你的云端存储，统一管理文件备份、传输策略与恢复。一处掌控，安心守护。</p>
           <div className="flex gap-5 text-xs text-slate-300 mt-8"><span>多云存储</span><span className="text-slate-600">/</span><span>加密迁移</span><span className="text-slate-600">/</span><span>审计追踪</span></div>
         </div>
-        <div className="text-xs text-slate-500">SafeKeep · 多云文件备份网关</div>
+        <div className="text-xs text-slate-500">SafeKeep · 多云文件备份网关 · <span className="font-mono">{versionLabel}</span></div>
       </div>
       <div className="flex flex-col items-center justify-center p-6 sm:p-12">
       <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200/80 shadow-xl shadow-slate-200/30 p-6 sm:p-9">

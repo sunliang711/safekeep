@@ -22,6 +22,7 @@ interface Props {
   active: NavTab
   onNavigate: (tab: NavTab) => void
   admin: Admin
+  version?: string
   onLogout: () => void
   children: React.ReactNode
 }
@@ -37,10 +38,11 @@ const navItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
   { id: 'settings', label: '系统设置', icon: <Settings className="w-4 h-4" /> },
 ]
 
-export const Layout: React.FC<Props> = ({ active, onNavigate, admin, onLogout, children }) => {
+export const Layout: React.FC<Props> = ({ active, onNavigate, admin, version = 'dev', onLogout, children }) => {
   const [menuOpen, setMenuOpen] = useState(false)
   const navigation = useRef<HTMLElement>(null)
   const current = navItems.find((item) => item.id === active)!
+  const versionLabel = version && version !== 'dev' && !version.startsWith('v') ? `v${version}` : version || 'dev'
 
   useEffect(() => {
     if (!menuOpen) return
@@ -82,7 +84,10 @@ export const Layout: React.FC<Props> = ({ active, onNavigate, admin, onLogout, c
             <ShieldCheck className="w-6 h-6" />
           </div>
           <div>
-            <div className="font-semibold text-xl text-white tracking-tight leading-none">SafeKeep<span className="text-indigo-400">.</span></div>
+            <div className="font-semibold text-xl text-white tracking-tight leading-none flex items-center gap-2">
+              <span>SafeKeep<span className="text-indigo-400">.</span></span>
+              <span className="text-[10px] font-mono font-normal px-1.5 py-0.5 rounded bg-white/10 text-slate-300">{versionLabel}</span>
+            </div>
             <div className="text-[11px] text-slate-400 mt-2 tracking-wider">多云文件备份管理平台</div>
           </div>
           <button onClick={() => setMenuOpen(false)} className="lg:hidden ml-auto p-1 text-slate-400" aria-label="收起导航"><X className="w-5 h-5" /></button>
@@ -129,11 +134,18 @@ export const Layout: React.FC<Props> = ({ active, onNavigate, admin, onLogout, c
             <button onClick={() => setMenuOpen(true)} aria-label="打开导航菜单" aria-controls="app-navigation" aria-expanded={menuOpen} className="lg:hidden p-2 -ml-2 text-slate-600 rounded-lg hover:bg-slate-100"><Menu className="w-5 h-5" /></button>
             <span className="hidden sm:inline">工作空间</span><ChevronRight className="hidden sm:block w-3 h-3" /><span className="font-medium text-slate-700">{current.label}</span>
           </div>
-          <div className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="w-4 h-4 text-indigo-500" /><span>SafeKeep 控制台</span></div>
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <ShieldCheck className="w-4 h-4 text-indigo-500" />
+            <span>SafeKeep 控制台</span>
+            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{versionLabel}</span>
+          </div>
         </header>
         <main id="main-content" tabIndex={-1} className="min-w-0">
           <div className="page-content max-w-[1440px] mx-auto px-4 py-6 sm:p-8">{children}</div>
-          <footer className="px-8 py-6 text-[11px] text-slate-400 flex flex-wrap gap-2 justify-between"><span>SafeKeep · 让每一份数据都有归处</span><span>多云备份 · 统一管理</span></footer>
+          <footer className="px-8 py-6 text-[11px] text-slate-400 flex flex-wrap gap-2 justify-between">
+            <span>SafeKeep {versionLabel} · 让每一份数据都有归处</span>
+            <span>多云备份 · 统一管理</span>
+          </footer>
         </main>
       </div>
     </div>

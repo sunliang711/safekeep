@@ -39,7 +39,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  setupStatus: () => req<{ initialized: boolean }>('/admin/api/v1/setup/status'),
+  setupStatus: () => req<{ initialized: boolean; version?: string }>('/admin/api/v1/setup/status'),
   setupInit: (username: string, password: string) =>
     req<{ admin: Admin; token: string }>('/admin/api/v1/setup/init', {
       method: 'POST',
@@ -51,7 +51,7 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   logout: () => req('/admin/api/v1/auth/logout', { method: 'POST' }),
-  me: () => req<{ admin: Admin }>('/admin/api/v1/auth/me'),
+  me: () => req<{ admin: Admin; version?: string }>('/admin/api/v1/auth/me'),
   changePassword: (old_password: string, new_password: string) =>
     req('/admin/api/v1/auth/password', {
       method: 'PUT',
@@ -85,6 +85,10 @@ export const api = {
     ),
   startDropboxOAuth: (id: string) =>
     req<{ authorize_url: string; redirect_uri: string }>(`/admin/api/v1/upstreams/${id}/oauth/dropbox/start`),
+  revealUpstreamSecrets: (id: string) =>
+    req<{ secret_access_key?: string; app_secret?: string; refresh_token?: string; proxy_password?: string }>(
+      `/admin/api/v1/upstreams/${id}/secrets`
+    ),
 
   listClients: () => req<{ items: Client[] }>('/admin/api/v1/clients'),
   createClient: (payload: any) =>
@@ -97,6 +101,8 @@ export const api = {
   deleteClient: (id: string) => req(`/admin/api/v1/clients/${id}`, { method: 'DELETE' }),
   rotateClientKey: (id: string) =>
     req<{ api_key: string; key_prefix: string }>(`/admin/api/v1/clients/${id}/rotate-key`, { method: 'POST' }),
+  revealClientSecrets: (id: string) =>
+    req<{ webhook_secret?: string }>(`/admin/api/v1/clients/${id}/secrets`),
 
   listTasks: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString()

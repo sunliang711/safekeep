@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
+import { SecretField } from '../components/SecretField'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
@@ -34,6 +35,7 @@ export const ClientsPage: React.FC = () => {
   const [initialFormSnap, setInitialFormSnap] = useState('')
   const [saving, setSaving] = useState(false)
   const [revealedKey, setRevealedKey] = useState<string | null>(null)
+  const [editingHasWebhookSecret, setEditingHasWebhookSecret] = useState(false)
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideTab, setGuideTab] = useState<'sync-upload' | 'async-upload' | 'raw-stream' | 'query-download'>('sync-upload')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -79,6 +81,7 @@ export const ClientsPage: React.FC = () => {
     }
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
+    setEditingHasWebhookSecret(false)
     setModalOpen(true)
   }
 
@@ -110,6 +113,7 @@ export const ClientsPage: React.FC = () => {
     }
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
+    setEditingHasWebhookSecret(Boolean(c.has_webhook_secret))
     setModalOpen(true)
   }
 
@@ -455,8 +459,14 @@ export const ClientsPage: React.FC = () => {
                   <input id="clients-field-7" value={form.webhook_url} onChange={(e) => setForm({ ...form, webhook_url: e.target.value })} placeholder="https://example.com/hook" className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-8" className="block text-xs text-slate-600 mb-1">Webhook 签名密钥 {form.id ? '（留空不变）' : ''}</label>
-                  <input id="clients-field-8" type="password" value={form.webhook_secret} onChange={(e) => setForm({ ...form, webhook_secret: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                  <label htmlFor="clients-field-8" className="block text-xs text-slate-600 mb-1">Webhook 签名密钥 {form.id ? '（默认掩码 *****，点右侧可查看）' : ''}</label>
+                  <SecretField
+                    id="clients-field-8"
+                    hasSaved={Boolean(form.id && editingHasWebhookSecret)}
+                    value={form.webhook_secret}
+                    onChange={(v) => setForm({ ...form, webhook_secret: v })}
+                    onReveal={form.id ? async () => (await api.revealClientSecrets(form.id!)).webhook_secret || '' : undefined}
+                  />
                 </div>
                 <div>
                   <label htmlFor="clients-field-9" className="block text-xs text-slate-600 mb-1">允许的 MIME 类型（逗号分隔，空=不限）</label>

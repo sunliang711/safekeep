@@ -131,6 +131,7 @@ func main() {
 	}
 
 	srv := server.New(store, cipher, registry, backupSvc, pool, sched, migSvc, auditLog, logger, webFS)
+	srv.SetVersion(version)
 	srv.SetCORSOrigins(boot.CORSAllowedOrigins)
 	httpSrv := &http.Server{
 		Addr:              boot.ListenAddr,

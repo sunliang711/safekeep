@@ -31,6 +31,7 @@ export function App() {
   const [bootError, setBootError] = useState('')
   const [initialized, setInitialized] = useState(true)
   const [admin, setAdmin] = useState<Admin | null>(null)
+  const [version, setVersion] = useState('dev')
   const [tab, setTab] = useState<NavTab>(initialTab())
 
   useEffect(() => {
@@ -40,10 +41,12 @@ export function App() {
       try {
         const st = await api.setupStatus()
         setInitialized(st.initialized)
+        if (st.version) setVersion(st.version)
         if (st.initialized) {
           try {
             const me = await api.me()
             setAdmin(me.admin)
+            if (me.version) setVersion(me.version)
           } catch {
             setAdmin(null)
           }
@@ -78,6 +81,7 @@ export function App() {
     return (
       <AuthPage
         mode="setup"
+        version={version}
         onSuccess={(a) => {
           setInitialized(true)
           setAdmin(a)
@@ -87,7 +91,7 @@ export function App() {
   }
 
   if (!admin) {
-    return <AuthPage mode="login" onSuccess={(a) => setAdmin(a)} />
+    return <AuthPage mode="login" version={version} onSuccess={(a) => setAdmin(a)} />
   }
 
   return (
@@ -96,6 +100,7 @@ export function App() {
         active={tab}
         onNavigate={navigate}
         admin={admin}
+        version={version}
         onLogout={async () => {
           if (!window.dispatchEvent(new Event('safekeep:before-navigate', { cancelable: true }))) return
           await api.logout()

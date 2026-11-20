@@ -32,7 +32,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"initialized": n > 0})
+	writeJSON(w, http.StatusOK, map[string]any{"initialized": n > 0, "version": s.version})
 }
 
 func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +149,7 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"admin": currentAdmin(r)})
+	writeJSON(w, http.StatusOK, map[string]any{"admin": currentAdmin(r), "version": s.version})
 }
 
 func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +306,62 @@ type upstreamWriteReq struct {
 	ProxyPassword *string         `json:"proxy_password"`
 }
 
+func isMaskedPlaceholder(v string) bool {
+	return v == "" || v == "*****" || v == "••••••"
+}
+
+func (s *Server) handleRevealUpstreamSecrets(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	id := chi.URLParam(r, "id")
+	u, err := s.store.GetUpstreamByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "upstream not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
+
+	out := map[string]string{}
+	if plain, err := s.cipher.DecryptString(u.ConfigEncrypted); err == nil && plain != "" {
+		switch u.Type {
+		case "s3":
+			var cfg storage.S3Config
+			if err := json.Unmarshal([]byte(plain), &cfg); err == nil {
+				out["secret_access_key"] = cfg.SecretAccessKey
+			}
+		case "dropbox":
+			var cfg storage.DropboxConfig
+			if err := json.Unmarshal([]byte(plain), &cfg); err == nil {
+				out["app_secret"] = cfg.AppSecret
+				out["refresh_token"] = cfg.RefreshToken
+			}
+		}
+	}
+	if u.ProxyPasswordEncrypted != "" {
+		if pPass, err := s.cipher.DecryptString(u.ProxyPasswordEncrypted); err == nil {
+			out["proxy_password"] = pPass
+		}
+	} else {
+		out["proxy_password"] = ""
+	}
+
+	s.auditLog.Record(r.Context(), audit.Event{
+		ActorType:    "admin",
+		ActorID:      admin.ID,
+		ActorName:    admin.Username,
+		Action:       "upstream.reveal_secrets",
+		ResourceType: "upstream",
+		ResourceID:   u.ID,
+		IPAddress:    clientIP(r),
+		UserAgent:    r.UserAgent(),
+		RequestID:    middleware.GetReqID(r.Context()),
+		Detail:       map[string]any{"name": u.Name, "type": u.Type},
+	})
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleListUpstreams(w http.ResponseWriter, r *http.Request) {
 	list, err := s.store.ListUpstreams(r.Context())
 	if err != nil {
@@ -433,7 +489,11 @@ func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
 
 	pPass, _ := s.cipher.DecryptString(existing.ProxyPasswordEncrypted)
 	if req.ProxyPassword != nil {
-		pPass = *req.ProxyPassword
+		if *req.ProxyPassword == "" {
+			pPass = ""
+		} else if !isMaskedPlaceholder(*req.ProxyPassword) {
+			pPass = *req.ProxyPassword
+		}
 	}
 	pCfg := proxy.Config{
 		Enabled:  req.ProxyEnabled,
@@ -526,7 +586,7 @@ func mergeUpstreamConfigSecrets(upstreamType string, existingRaw, incomingRaw js
 		if err := json.Unmarshal(incomingRaw, &newCfg); err != nil {
 			return nil, err
 		}
-		if newCfg.SecretAccessKey == "" {
+		if isMaskedPlaceholder(newCfg.SecretAccessKey) {
 			newCfg.SecretAccessKey = oldCfg.SecretAccessKey
 		}
 		return json.Marshal(newCfg)
@@ -536,10 +596,10 @@ func mergeUpstreamConfigSecrets(upstreamType string, existingRaw, incomingRaw js
 		if err := json.Unmarshal(incomingRaw, &newCfg); err != nil {
 			return nil, err
 		}
-		if newCfg.AppSecret == "" {
+		if isMaskedPlaceholder(newCfg.AppSecret) {
 			newCfg.AppSecret = oldCfg.AppSecret
 		}
-		if newCfg.RefreshToken == "" {
+		if isMaskedPlaceholder(newCfg.RefreshToken) {
 			newCfg.RefreshToken = oldCfg.RefreshToken
 		}
 		if newCfg.AccessToken == "" {
@@ -654,13 +714,17 @@ func (s *Server) handleTestUpstreamProxy(w http.ResponseWriter, r *http.Request)
 	pPass := req.ProxyPassword
 	if req.ClearProxyPassword {
 		pPass = ""
-	} else if pPass == "" && strings.TrimSpace(req.UpstreamID) != "" {
+	} else if isMaskedPlaceholder(pPass) && strings.TrimSpace(req.UpstreamID) != "" {
 		existing, err := s.store.GetUpstreamByID(r.Context(), strings.TrimSpace(req.UpstreamID))
 		if err == nil && existing.ProxyPasswordEncrypted != "" {
 			if dec, dErr := s.cipher.DecryptString(existing.ProxyPasswordEncrypted); dErr == nil {
 				pPass = dec
 			}
+		} else {
+			pPass = ""
 		}
+	} else if isMaskedPlaceholder(pPass) {
+		pPass = ""
 	}
 
 	pCfg := proxy.Config{
@@ -940,6 +1004,39 @@ func (s *Server) toClientDTO(ctx context.Context, c db.Client) clientDTO {
 	}
 }
 
+func (s *Server) handleRevealClientSecrets(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	id := chi.URLParam(r, "id")
+	c, err := s.store.GetClientByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "client not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
+	whSecret := ""
+	if c.WebhookSecretEncrypted != "" {
+		whSecret, _ = s.cipher.DecryptString(c.WebhookSecretEncrypted)
+	}
+	s.auditLog.Record(r.Context(), audit.Event{
+		ActorType:    "admin",
+		ActorID:      admin.ID,
+		ActorName:    admin.Username,
+		Action:       "client.reveal_secrets",
+		ResourceType: "client",
+		ResourceID:   c.ID,
+		IPAddress:    clientIP(r),
+		UserAgent:    r.UserAgent(),
+		RequestID:    middleware.GetReqID(r.Context()),
+		Detail:       map[string]any{"name": c.Name},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"webhook_secret": whSecret,
+	})
+}
+
 func (s *Server) handleListClients(w http.ResponseWriter, r *http.Request) {
 	list, err := s.store.ListClients(r.Context())
 	if err != nil {
@@ -1113,7 +1210,11 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	c.RateLimitRPM = req.RateLimitRPM
 	c.WebhookURL = strings.TrimSpace(req.WebhookURL)
 	if req.WebhookSecret != nil {
-		c.WebhookSecretEncrypted, _ = s.cipher.EncryptString(*req.WebhookSecret)
+		if *req.WebhookSecret == "" {
+			c.WebhookSecretEncrypted = ""
+		} else if !isMaskedPlaceholder(*req.WebhookSecret) {
+			c.WebhookSecretEncrypted, _ = s.cipher.EncryptString(*req.WebhookSecret)
+		}
 	}
 	c.ExpiresAt = req.ExpiresAt
 

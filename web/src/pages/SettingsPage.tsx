@@ -9,6 +9,26 @@ import { copyText } from '../utils/clipboard'
 import type { Admin, SMTPConfig, SystemSettings } from '../types'
 
 type SettingsSubTab = 'general' | 'smtp' | 'admins'
+type SizeUnit = 'KB' | 'MB' | 'GB'
+
+const SIZE_UNIT_MULTIPLIER: Record<SizeUnit, number> = {
+  KB: 1024,
+  MB: 1024 * 1024,
+  GB: 1024 * 1024 * 1024,
+}
+
+function splitBytesToUnit(bytes: number): { amount: string; unit: SizeUnit } {
+  if (!bytes || bytes <= 0) return { amount: '0', unit: 'MB' }
+  if (bytes % SIZE_UNIT_MULTIPLIER.GB === 0) return { amount: String(bytes / SIZE_UNIT_MULTIPLIER.GB), unit: 'GB' }
+  if (bytes % SIZE_UNIT_MULTIPLIER.MB === 0) return { amount: String(bytes / SIZE_UNIT_MULTIPLIER.MB), unit: 'MB' }
+  if (bytes % SIZE_UNIT_MULTIPLIER.KB === 0) return { amount: String(bytes / SIZE_UNIT_MULTIPLIER.KB), unit: 'KB' }
+  return { amount: String(Number((bytes / SIZE_UNIT_MULTIPLIER.MB).toFixed(4))), unit: 'MB' }
+}
+
+interface SizeFieldState {
+  amount: string
+  unit: SizeUnit
+}
 
 function smtpSnapshot(cfg: {
   enabled: boolean
@@ -39,6 +59,9 @@ export const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<SystemSettings | null>(null)
   const [savedGeneralSnap, setSavedGeneralSnap] = useState('')
   const [savingGeneral, setSavingGeneral] = useState(false)
+  const [maxFileSizeField, setMaxFileSizeField] = useState<SizeFieldState>({ amount: '100', unit: 'MB' })
+  const [dailyLimitField, setDailyLimitField] = useState<SizeFieldState>({ amount: '1', unit: 'GB' })
+  const [maxSpoolField, setMaxSpoolField] = useState<SizeFieldState>({ amount: '10', unit: 'GB' })
   const [admins, setAdmins] = useState<Admin[]>([])
 
   // SMTP state
@@ -103,12 +126,31 @@ export const SettingsPage: React.FC = () => {
     )
   }
 
+  const syncSizeFieldsFromSettings = (s: SystemSettings) => {
+    setMaxFileSizeField(splitBytesToUnit(s.max_file_size_bytes))
+    setDailyLimitField(splitBytesToUnit(s.daily_traffic_limit_bytes))
+    setMaxSpoolField(splitBytesToUnit(s.max_spool_bytes))
+  }
+
+  const updateByteField = (
+    key: 'max_file_size_bytes' | 'daily_traffic_limit_bytes' | 'max_spool_bytes',
+    setter: React.Dispatch<React.SetStateAction<SizeFieldState>>,
+    next: SizeFieldState
+  ) => {
+    setter(next)
+    if (!settings) return
+    const num = Number(next.amount)
+    const computed = Number.isFinite(num) && num >= 0 ? Math.round(num * SIZE_UNIT_MULTIPLIER[next.unit]) : 0
+    setSettings({ ...settings, [key]: computed })
+  }
+
   const load = async () => {
     setLoading(true)
     setLoadError('')
     try {
       const [s, a, smtp] = await Promise.all([api.getSettings(), api.listAdmins(), api.getSMTP()])
       setSettings(s)
+      syncSizeFieldsFromSettings(s)
       setSavedGeneralSnap(JSON.stringify(s))
       setAdmins(a.items || [])
       applySavedSmtp(smtp)
@@ -130,10 +172,15 @@ export const SettingsPage: React.FC = () => {
   const saveSettings = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!settings) return
+    if (settings.max_file_size_bytes <= 0) {
+      toast.error('默认单文件上限必须大于 0')
+      return
+    }
     setSavingGeneral(true)
     try {
       const updated = await api.updateSettings(settings)
       setSettings(updated)
+      syncSizeFieldsFromSettings(updated)
       setSavedGeneralSnap(JSON.stringify(updated))
       toast.success('全局运行设置已保存')
     } catch (e: any) {
@@ -382,37 +429,127 @@ export const SettingsPage: React.FC = () => {
                     </div>
                     <div>
                       <label htmlFor="settings-field-3" className="block text-xs text-slate-600 mb-1">
-                        默认单文件上限（字节，当前 {formatBytes(settings.max_file_size_bytes)}，默认 100 MiB）
+                        默认单文件上限（默认 100 MB）
                       </label>
-                      <input id="settings-field-3"
-                        type="number"
-                        min={1}
-                        value={settings.max_file_size_bytes}
-                        onChange={(e) => setSettings({ ...settings, max_file_size_bytes: Number(e.target.value) })}
-                        className="w-full px-3 py-1.5 border rounded-lg"
-                      />
+                      <div className="flex gap-1.5">
+                        <input
+                          id="settings-field-3"
+                          type="number"
+                          min={0.001}
+                          step="any"
+                          required
+                          value={maxFileSizeField.amount}
+                          onChange={(e) =>
+                            updateByteField('max_file_size_bytes', setMaxFileSizeField, {
+                              ...maxFileSizeField,
+                              amount: e.target.value,
+                            })
+                          }
+                          className="flex-1 min-w-0 px-3 py-1.5 border rounded-lg"
+                        />
+                        <select
+                          aria-label="默认单文件上限单位"
+                          value={maxFileSizeField.unit}
+                          onChange={(e) =>
+                            updateByteField('max_file_size_bytes', setMaxFileSizeField, {
+                              ...maxFileSizeField,
+                              unit: e.target.value as SizeUnit,
+                            })
+                          }
+                          className="w-20 px-2 py-1.5 border rounded-lg bg-white font-mono text-xs"
+                        >
+                          <option value="KB">KB</option>
+                          <option value="MB">MB</option>
+                          <option value="GB">GB</option>
+                        </select>
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">
+                        当前：{formatBytes(settings.max_file_size_bytes)}（{settings.max_file_size_bytes.toLocaleString()} 字节）
+                      </div>
                     </div>
                     <div>
                       <label htmlFor="settings-field-4" className="block text-xs text-slate-600 mb-1">
-                        每日发送熔断阈值（字节，当前 {settings.daily_traffic_limit_bytes > 0 ? formatBytes(settings.daily_traffic_limit_bytes) : '不熔断'}，默认 1 GiB）
+                        每日发送熔断阈值（默认 1 GB，0=不熔断）
                       </label>
-                      <input id="settings-field-4"
-                        type="number"
-                        min={0}
-                        value={settings.daily_traffic_limit_bytes}
-                        onChange={(e) => setSettings({ ...settings, daily_traffic_limit_bytes: Number(e.target.value) })}
-                        className="w-full px-3 py-1.5 border rounded-lg"
-                      />
+                      <div className="flex gap-1.5">
+                        <input
+                          id="settings-field-4"
+                          type="number"
+                          min={0}
+                          step="any"
+                          required
+                          value={dailyLimitField.amount}
+                          onChange={(e) =>
+                            updateByteField('daily_traffic_limit_bytes', setDailyLimitField, {
+                              ...dailyLimitField,
+                              amount: e.target.value,
+                            })
+                          }
+                          className="flex-1 min-w-0 px-3 py-1.5 border rounded-lg"
+                        />
+                        <select
+                          aria-label="每日发送熔断阈值单位"
+                          value={dailyLimitField.unit}
+                          onChange={(e) =>
+                            updateByteField('daily_traffic_limit_bytes', setDailyLimitField, {
+                              ...dailyLimitField,
+                              unit: e.target.value as SizeUnit,
+                            })
+                          }
+                          className="w-20 px-2 py-1.5 border rounded-lg bg-white font-mono text-xs"
+                        >
+                          <option value="KB">KB</option>
+                          <option value="MB">MB</option>
+                          <option value="GB">GB</option>
+                        </select>
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">
+                        {settings.daily_traffic_limit_bytes > 0
+                          ? `当前：${formatBytes(settings.daily_traffic_limit_bytes)}（${settings.daily_traffic_limit_bytes.toLocaleString()} 字节）`
+                          : '当前：不熔断（0 字节）'}
+                      </div>
                     </div>
                     <div>
-                      <label htmlFor="settings-field-5" className="block text-xs text-slate-600 mb-1">本地缓冲总容量上限（字节，0=不限）</label>
-                      <input id="settings-field-5"
-                        type="number"
-                        min={0}
-                        value={settings.max_spool_bytes}
-                        onChange={(e) => setSettings({ ...settings, max_spool_bytes: Number(e.target.value) })}
-                        className="w-full px-3 py-1.5 border rounded-lg"
-                      />
+                      <label htmlFor="settings-field-5" className="block text-xs text-slate-600 mb-1">
+                        本地缓冲总容量上限（0=不限）
+                      </label>
+                      <div className="flex gap-1.5">
+                        <input
+                          id="settings-field-5"
+                          type="number"
+                          min={0}
+                          step="any"
+                          required
+                          value={maxSpoolField.amount}
+                          onChange={(e) =>
+                            updateByteField('max_spool_bytes', setMaxSpoolField, {
+                              ...maxSpoolField,
+                              amount: e.target.value,
+                            })
+                          }
+                          className="flex-1 min-w-0 px-3 py-1.5 border rounded-lg"
+                        />
+                        <select
+                          aria-label="本地缓冲总容量上限单位"
+                          value={maxSpoolField.unit}
+                          onChange={(e) =>
+                            updateByteField('max_spool_bytes', setMaxSpoolField, {
+                              ...maxSpoolField,
+                              unit: e.target.value as SizeUnit,
+                            })
+                          }
+                          className="w-20 px-2 py-1.5 border rounded-lg bg-white font-mono text-xs"
+                        >
+                          <option value="KB">KB</option>
+                          <option value="MB">MB</option>
+                          <option value="GB">GB</option>
+                        </select>
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">
+                        {settings.max_spool_bytes > 0
+                          ? `当前：${formatBytes(settings.max_spool_bytes)}（${settings.max_spool_bytes.toLocaleString()} 字节）`
+                          : '当前：不限（0 字节）'}
+                      </div>
                     </div>
                     <div>
                       <label htmlFor="settings-field-6" className="block text-xs text-slate-600 mb-1">同步模式超时（秒，超时转后台）</label>

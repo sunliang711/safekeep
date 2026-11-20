@@ -567,6 +567,45 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 		t.Fatalf("expected proxy test auth failure, got code=%d out=%+v", proxyFailResp.StatusCode, proxyFailOut)
 	}
 
+	// 13c. Version reporting & secret reveal endpoints (/upstreams/{id}/secrets, /clients/{id}/secrets)
+	statusVerResp, err := http.Get(env.srv.URL + "/admin/api/v1/setup/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statusVerOut struct {
+		Initialized bool   `json:"initialized"`
+		Version     string `json:"version"`
+	}
+	_ = json.NewDecoder(statusVerResp.Body).Decode(&statusVerOut)
+	statusVerResp.Body.Close()
+	if !statusVerOut.Initialized || statusVerOut.Version == "" {
+		t.Fatalf("expected initialized=true and non-empty version, got %+v", statusVerOut)
+	}
+
+	upRevealResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/upstreams/"+upS3.ID+"/secrets", nil)
+	var upRevealOut map[string]string
+	_ = json.NewDecoder(upRevealResp.Body).Decode(&upRevealOut)
+	upRevealResp.Body.Close()
+	if upRevealResp.StatusCode != http.StatusOK || upRevealOut["secret_access_key"] != "sk" {
+		t.Fatalf("expected upstream secret_access_key sk, got code=%d out=%+v", upRevealResp.StatusCode, upRevealOut)
+	}
+
+	dbxRevealResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/upstreams/"+upDbx.ID+"/secrets", nil)
+	var dbxRevealOut map[string]string
+	_ = json.NewDecoder(dbxRevealResp.Body).Decode(&dbxRevealOut)
+	dbxRevealResp.Body.Close()
+	if dbxRevealResp.StatusCode != http.StatusOK || dbxRevealOut["app_secret"] != "dbx-secret" || dbxRevealOut["refresh_token"] != "dbx-refresh" {
+		t.Fatalf("expected dropbox secrets revealed, got code=%d out=%+v", dbxRevealResp.StatusCode, dbxRevealOut)
+	}
+
+	clRevealResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/clients/"+clOut.Client.ID+"/secrets", nil)
+	var clRevealOut map[string]string
+	_ = json.NewDecoder(clRevealResp.Body).Decode(&clRevealOut)
+	clRevealResp.Body.Close()
+	if clRevealResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected client secret reveal 200, got %d", clRevealResp.StatusCode)
+	}
+
 	// 14. SMTP alerts, oversize file rejection (>max_file_size_bytes), and daily circuit breaker (>daily_traffic_limit_bytes)
 	smtpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

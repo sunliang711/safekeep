@@ -51,6 +51,7 @@ type Server struct {
 	auditLog    *audit.Logger
 	logger      *slog.Logger
 	webFS       fs.FS
+	version     string
 	corsOrigins []string
 
 	rateMu      sync.Mutex
@@ -96,8 +97,16 @@ func New(
 		auditLog:    auditLog,
 		logger:      logger,
 		webFS:       webFS,
+		version:     "dev",
 		rateBuckets: make(map[string]*rateWindow),
 		oauthStates: make(map[string]oauthStateEntry),
+	}
+}
+
+// SetVersion sets the build version reported by status and auth endpoints.
+func (s *Server) SetVersion(v string) {
+	if strings.TrimSpace(v) != "" {
+		s.version = strings.TrimSpace(v)
 	}
 }
 
@@ -110,7 +119,7 @@ func (s *Server) Router() http.Handler {
 
 	// Health & Readiness
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.version})
 	})
 	r.Get("/readyz", s.handleReadyz)
 
@@ -142,6 +151,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/upstreams", s.handleListUpstreams)
 			r.Post("/upstreams", s.handleCreateUpstream)
 			r.Post("/upstreams/test-proxy", s.handleTestUpstreamProxy)
+			r.Get("/upstreams/{id}/secrets", s.handleRevealUpstreamSecrets)
 			r.Put("/upstreams/{id}", s.handleUpdateUpstream)
 			r.Delete("/upstreams/{id}", s.handleDeleteUpstream)
 			r.Post("/upstreams/{id}/test", s.handleTestUpstream)
@@ -149,6 +159,7 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/clients", s.handleListClients)
 			r.Post("/clients", s.handleCreateClient)
+			r.Get("/clients/{id}/secrets", s.handleRevealClientSecrets)
 			r.Put("/clients/{id}", s.handleUpdateClient)
 			r.Delete("/clients/{id}", s.handleDeleteClient)
 			r.Post("/clients/{id}/rotate-key", s.handleRotateClientKey)

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { CheckCircle2, Copy, Link2, Loader2, Plus, Trash2, Wifi, XCircle } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
+import { SecretField } from '../components/SecretField'
 import { api } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
@@ -75,6 +76,12 @@ export const UpstreamsPage: React.FC = () => {
   const [testingProxy, setTestingProxy] = useState(false)
   const [proxyTargetURL, setProxyTargetURL] = useState('')
   const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [savedSecretFlags, setSavedSecretFlags] = useState({
+    secretKey: false,
+    appSecret: false,
+    refreshToken: false,
+    proxyPass: false,
+  })
 
   const load = async () => {
     setLoading(true)
@@ -129,6 +136,12 @@ export const UpstreamsPage: React.FC = () => {
     }
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
+    setSavedSecretFlags({
+      secretKey: Boolean(u.config?.has_secret_key),
+      appSecret: Boolean(u.config?.has_app_secret),
+      refreshToken: Boolean(u.config?.has_refresh_token),
+      proxyPass: Boolean(u.has_proxy_password),
+    })
     setProxyTestResult(null)
     setProxyTargetURL('')
     setModalOpen(true)
@@ -290,6 +303,7 @@ export const UpstreamsPage: React.FC = () => {
             const next = emptyForm()
             setForm(next)
             setInitialFormSnap(JSON.stringify(next))
+            setSavedSecretFlags({ secretKey: false, appSecret: false, refreshToken: false, proxyPass: false })
             setProxyTestResult(null)
             setProxyTargetURL('')
             setModalOpen(true)
@@ -308,6 +322,7 @@ export const UpstreamsPage: React.FC = () => {
             const next = emptyForm()
             setForm(next)
             setInitialFormSnap(JSON.stringify(next))
+            setSavedSecretFlags({ secretKey: false, appSecret: false, refreshToken: false, proxyPass: false })
             setProxyTestResult(null)
             setProxyTargetURL('')
             setModalErr('')
@@ -561,8 +576,15 @@ export const UpstreamsPage: React.FC = () => {
                       <input id="upstreams-field-7" required value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-8" className="block text-xs text-slate-600 mb-1">Secret Access Key {form.id ? '（留空则保持不变）' : '*'}</label>
-                      <input id="upstreams-field-8" type="password" required={!form.id} value={form.secret_access_key} onChange={(e) => setForm({ ...form, secret_access_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-8" className="block text-xs text-slate-600 mb-1">Secret Access Key {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}</label>
+                      <SecretField
+                        id="upstreams-field-8"
+                        required={!form.id}
+                        hasSaved={Boolean(form.id && savedSecretFlags.secretKey)}
+                        value={form.secret_access_key}
+                        onChange={(v) => setForm({ ...form, secret_access_key: v })}
+                        onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).secret_access_key || '' : undefined}
+                      />
                     </div>
                     <div className="col-span-2">
                       <label htmlFor="upstreams-field-9" className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD_IA / GLACIER）</label>
@@ -583,16 +605,29 @@ export const UpstreamsPage: React.FC = () => {
                       <input id="upstreams-field-10" required value={form.app_key} onChange={(e) => setForm({ ...form, app_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-11" className="block text-xs text-slate-600 mb-1">App Secret {form.id ? '（留空不变）' : '*'}</label>
-                      <input id="upstreams-field-11" type="password" required={!form.id} value={form.app_secret} onChange={(e) => setForm({ ...form, app_secret: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-11" className="block text-xs text-slate-600 mb-1">App Secret {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}</label>
+                      <SecretField
+                        id="upstreams-field-11"
+                        required={!form.id}
+                        hasSaved={Boolean(form.id && savedSecretFlags.appSecret)}
+                        value={form.app_secret}
+                        onChange={(v) => setForm({ ...form, app_secret: v })}
+                        onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).app_secret || '' : undefined}
+                      />
                     </div>
                     <div>
                       <label htmlFor="upstreams-field-12" className="block text-xs text-slate-600 mb-1">Dropbox 根目录</label>
                       <input id="upstreams-field-12" value={form.root_path} onChange={(e) => setForm({ ...form, root_path: e.target.value })} placeholder="/safekeep" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-13" className="block text-xs text-slate-600 mb-1">Refresh Token（可选，也可保存后走 Web OAuth2 获取）</label>
-                      <input id="upstreams-field-13" type="password" value={form.refresh_token} onChange={(e) => setForm({ ...form, refresh_token: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                      <label htmlFor="upstreams-field-13" className="block text-xs text-slate-600 mb-1">Refresh Token（可选，默认掩码 *****）</label>
+                      <SecretField
+                        id="upstreams-field-13"
+                        hasSaved={Boolean(form.id && savedSecretFlags.refreshToken)}
+                        value={form.refresh_token}
+                        onChange={(v) => setForm({ ...form, refresh_token: v })}
+                        onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).refresh_token || '' : undefined}
+                      />
                     </div>
                   </div>
                   <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-900 space-y-1">
@@ -605,7 +640,14 @@ export const UpstreamsPage: React.FC = () => {
                       </code>
                       <button
                         type="button"
-                        onClick={() => navigator.clipboard.writeText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)}
+                        onClick={async () => {
+                          try {
+                            await copyText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
+                            toast.success('已复制回调地址')
+                          } catch (e: any) {
+                            toast.error(e.message || '复制失败')
+                          }
+                        }}
                         className="text-sky-700 hover:text-sky-900 inline-flex items-center gap-0.5 font-medium"
                       >
                         <Copy className="w-3.5 h-3.5" /> 复制
@@ -646,8 +688,15 @@ export const UpstreamsPage: React.FC = () => {
                       <input id="upstreams-field-17" value={form.proxy_username} onChange={(e) => setForm({ ...form, proxy_username: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div className="col-span-2">
-                      <label htmlFor="upstreams-field-18" className="block text-xs text-slate-600 mb-1">代理密码（{form.id ? '留空保持不变' : '可选'}）</label>
-                      <input id="upstreams-field-18" type="password" disabled={form.clear_proxy_password} value={form.proxy_password} onChange={(e) => setForm({ ...form, proxy_password: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg disabled:bg-slate-100" />
+                      <label htmlFor="upstreams-field-18" className="block text-xs text-slate-600 mb-1">代理密码（{form.id ? '默认掩码 *****，点右侧可查看' : '可选'}）</label>
+                      <SecretField
+                        id="upstreams-field-18"
+                        disabled={form.clear_proxy_password}
+                        hasSaved={Boolean(form.id && savedSecretFlags.proxyPass && !form.clear_proxy_password)}
+                        value={form.proxy_password}
+                        onChange={(v) => setForm({ ...form, proxy_password: v })}
+                        onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).proxy_password || '' : undefined}
+                      />
                       {form.id && (
                         <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
                           <input type="checkbox" checked={form.clear_proxy_password} onChange={(e) => setForm({ ...form, clear_proxy_password: e.target.checked, proxy_password: '' })} />

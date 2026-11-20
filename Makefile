@@ -2,7 +2,8 @@ BINARY := safekeep
 CMD := ./cmd/safekeep
 WEB_DIR := web
 CGO_ENABLED ?= 0
-LDFLAGS ?= -s -w
+VERSION ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null),dev)
+LDFLAGS ?= -s -w -X main.version=$(VERSION)
 
 export PATH := $(PATH):/usr/local/go/bin:/opt/homebrew/bin
 GO ?= $(or $(shell PATH="$(PATH)" command -v go),go)
