@@ -39,6 +39,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
   const [upDedup, setUpDedup] = useState(true)
   const [upMetadata, setUpMetadata] = useState('')
   const [upFile, setUpFile] = useState<File | null>(null)
+  const [fileInputKey, setFileInputKey] = useState(0)
   const [uploading, setUploading] = useState(false)
   const [uploadErr, setUploadErr] = useState('')
   const [uploadResult, setUploadResult] = useState<{ task: BackupTask; timedOut?: boolean } | null>(null)
@@ -201,6 +202,8 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
     try {
       const res = await api.adminUploadBackup(upClientId, fd, query)
       setUploadResult({ task: res.task, timedOut: res.timed_out_to_async })
+      setUpFile(null)
+      setFileInputKey((k) => k + 1)
       await load(0)
       setOffset(0)
     } catch (err: any) {
@@ -614,10 +617,16 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
 
                 <div>
                   <label htmlFor="tasks-field-4" className="block text-xs text-slate-600 mb-1">选择文件 *</label>
-                  <input id="tasks-field-4"
+                  <input
+                    id="tasks-field-4"
+                    key={fileInputKey}
                     type="file"
                     required
-                    onChange={(e) => setUpFile(e.target.files?.[0] || null)}
+                    onChange={(e) => {
+                      setUpFile(e.target.files?.[0] || null)
+                      setUploadResult(null)
+                      setUploadErr('')
+                    }}
                     className="w-full text-xs border rounded-lg p-2 bg-slate-50"
                   />
                   {upFile && (
@@ -684,10 +693,10 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                   </button>
                   <button
                     type="submit"
-                    disabled={uploading || !upClientId || !activeClient || activeClient.upstreams.length === 0}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg font-medium"
+                    disabled={uploading || !upFile || !upClientId || !activeClient || activeClient.upstreams.length === 0}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg font-medium"
                   >
-                    {uploading ? '上传中...' : '开始上传备份'}
+                    {uploading ? '上传中...' : uploadResult && !upFile ? '上传已完成' : '开始上传备份'}
                   </button>
                 </div>
               </form>
