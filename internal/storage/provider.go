@@ -42,6 +42,80 @@ type S3Config struct {
 	StorageClass    string `json:"storage_class"`
 }
 
+// R2Config stores decrypted configuration for a Cloudflare R2 upstream.
+type R2Config struct {
+	AccountID       string `json:"account_id"`
+	Jurisdiction    string `json:"jurisdiction,omitempty"` // "" (default) | "eu" | "fedramp"
+	Endpoint        string `json:"endpoint,omitempty"`     // optional custom endpoint override
+	Region          string `json:"region,omitempty"`       // defaults to "auto"
+	Bucket          string `json:"bucket"`
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	BasePrefix      string `json:"base_prefix"`
+	ForcePathStyle  bool   `json:"force_path_style"`
+	StorageClass    string `json:"storage_class,omitempty"`
+}
+
+// ResolveR2Endpoint returns the effective S3 API endpoint URL for a Cloudflare R2 config.
+func ResolveR2Endpoint(cfg R2Config) (string, error) {
+	ep := strings.TrimSpace(cfg.Endpoint)
+	if ep != "" {
+		if !strings.Contains(ep, "://") {
+			ep = "https://" + ep
+		}
+		return strings.TrimRight(ep, "/"), nil
+	}
+	accountID := strings.TrimSpace(cfg.AccountID)
+	if accountID == "" {
+		return "", fmt.Errorf("r2 account_id or endpoint is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Jurisdiction)) {
+	case "", "default":
+		return fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID), nil
+	case "eu":
+		return fmt.Sprintf("https://%s.eu.r2.cloudflarestorage.com", accountID), nil
+	case "fedramp":
+		return fmt.Sprintf("https://%s.fedramp.r2.cloudflarestorage.com", accountID), nil
+	default:
+		return "", fmt.Errorf("unsupported r2 jurisdiction %q (must be empty, eu, or fedramp)", cfg.Jurisdiction)
+	}
+}
+
+// GCSConfig stores decrypted configuration for a Google Cloud Storage upstream.
+type GCSConfig struct {
+	Bucket             string `json:"bucket"`
+	ServiceAccountJSON string `json:"service_account_json"`
+	BasePrefix         string `json:"base_prefix"`
+	StorageClass       string `json:"storage_class,omitempty"`
+	ProjectID          string `json:"project_id,omitempty"`
+	ClientEmail        string `json:"client_email,omitempty"`
+	APIBaseURL         string `json:"api_base_url,omitempty"` // optional override for tests
+	TokenURL           string `json:"token_url,omitempty"`    // optional override for tests
+}
+
+// ParseGCSServiceAccountSummary extracts non-secret metadata (project_id, client_email) from a GCP service account JSON key.
+func ParseGCSServiceAccountSummary(saJSON string) (projectID, clientEmail string, err error) {
+	if strings.TrimSpace(saJSON) == "" {
+		return "", "", fmt.Errorf("gcs service_account_json is required")
+	}
+	var sa struct {
+		Type        string `json:"type"`
+		ProjectID   string `json:"project_id"`
+		ClientEmail string `json:"client_email"`
+		PrivateKey  string `json:"private_key"`
+	}
+	if err := json.Unmarshal([]byte(saJSON), &sa); err != nil {
+		return "", "", fmt.Errorf("invalid gcs service_account_json: %w", err)
+	}
+	if sa.Type != "" && sa.Type != "service_account" {
+		return "", "", fmt.Errorf("gcs service_account_json type must be 'service_account', got %q", sa.Type)
+	}
+	if strings.TrimSpace(sa.ClientEmail) == "" || strings.TrimSpace(sa.PrivateKey) == "" {
+		return "", "", fmt.Errorf("gcs service_account_json must contain client_email and private_key")
+	}
+	return strings.TrimSpace(sa.ProjectID), strings.TrimSpace(sa.ClientEmail), nil
+}
+
 // DropboxConfig stores decrypted configuration and OAuth2 tokens for a Dropbox upstream.
 type DropboxConfig struct {
 	AppKey         string    `json:"app_key"`
@@ -222,5 +296,59 @@ func MaskDropboxConfig(raw []byte) (map[string]any, error) {
 		"token_expires_at":  cfg.TokenExpiresAt,
 		"root_path":         cfg.RootPath,
 		"account_email":     cfg.AccountEmail,
+	}, nil
+}
+
+// MaskR2Config returns a redacted map suitable for Web UI display.
+func MaskR2Config(raw []byte) (map[string]any, error) {
+	var cfg R2Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	resolvedEndpoint, _ := ResolveR2Endpoint(cfg)
+	region := strings.TrimSpace(cfg.Region)
+	if region == "" {
+		region = "auto"
+	}
+	return map[string]any{
+		"account_id":        cfg.AccountID,
+		"jurisdiction":      cfg.Jurisdiction,
+		"endpoint":          cfg.Endpoint,
+		"resolved_endpoint": resolvedEndpoint,
+		"region":            region,
+		"bucket":            cfg.Bucket,
+		"access_key_id":     cfg.AccessKeyID,
+		"has_secret_key":    cfg.SecretAccessKey != "",
+		"base_prefix":       cfg.BasePrefix,
+		"force_path_style":  cfg.ForcePathStyle,
+		"storage_class":     cfg.StorageClass,
+	}, nil
+}
+
+// MaskGCSConfig returns a redacted map suitable for Web UI display.
+func MaskGCSConfig(raw []byte) (map[string]any, error) {
+	var cfg GCSConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	projectID := strings.TrimSpace(cfg.ProjectID)
+	clientEmail := strings.TrimSpace(cfg.ClientEmail)
+	if (projectID == "" || clientEmail == "") && strings.TrimSpace(cfg.ServiceAccountJSON) != "" {
+		if p, e, err := ParseGCSServiceAccountSummary(cfg.ServiceAccountJSON); err == nil {
+			if projectID == "" {
+				projectID = p
+			}
+			if clientEmail == "" {
+				clientEmail = e
+			}
+		}
+	}
+	return map[string]any{
+		"bucket":                   cfg.Bucket,
+		"base_prefix":              cfg.BasePrefix,
+		"storage_class":            cfg.StorageClass,
+		"project_id":               projectID,
+		"client_email":             clientEmail,
+		"has_service_account_json": strings.TrimSpace(cfg.ServiceAccountJSON) != "",
 	}, nil
 }

@@ -22,6 +22,7 @@ import (
 	"safekeep/internal/proxy"
 	"safekeep/internal/storage"
 	"safekeep/internal/storage/dropbox"
+	"safekeep/internal/storage/gcs"
 )
 
 // --- Setup & Auth ---
@@ -265,6 +266,14 @@ func (s *Server) toUpstreamDTO(u db.Upstream) upstreamDTO {
 			if m, err := storage.MaskS3Config([]byte(plain)); err == nil {
 				cfgMap = m
 			}
+		case "r2":
+			if m, err := storage.MaskR2Config([]byte(plain)); err == nil {
+				cfgMap = m
+			}
+		case "gcs":
+			if m, err := storage.MaskGCSConfig([]byte(plain)); err == nil {
+				cfgMap = m
+			}
 		case "dropbox":
 			if m, err := storage.MaskDropboxConfig([]byte(plain)); err == nil {
 				cfgMap = m
@@ -331,6 +340,16 @@ func (s *Server) handleRevealUpstreamSecrets(w http.ResponseWriter, r *http.Requ
 			if err := json.Unmarshal([]byte(plain), &cfg); err == nil {
 				out["secret_access_key"] = cfg.SecretAccessKey
 			}
+		case "r2":
+			var cfg storage.R2Config
+			if err := json.Unmarshal([]byte(plain), &cfg); err == nil {
+				out["secret_access_key"] = cfg.SecretAccessKey
+			}
+		case "gcs":
+			var cfg storage.GCSConfig
+			if err := json.Unmarshal([]byte(plain), &cfg); err == nil {
+				out["service_account_json"] = cfg.ServiceAccountJSON
+			}
 		case "dropbox":
 			var cfg storage.DropboxConfig
 			if err := json.Unmarshal([]byte(plain), &cfg); err == nil {
@@ -384,8 +403,8 @@ func (s *Server) handleCreateUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
-	if req.Name == "" || (req.Type != "s3" && req.Type != "dropbox") {
-		writeError(w, http.StatusBadRequest, "validation_error", "name is required and type must be 's3' or 'dropbox'")
+	if req.Name == "" || (req.Type != "s3" && req.Type != "r2" && req.Type != "gcs" && req.Type != "dropbox") {
+		writeError(w, http.StatusBadRequest, "validation_error", "name is required and type must be 's3', 'r2', 'gcs', or 'dropbox'")
 		return
 	}
 
@@ -563,6 +582,31 @@ func validateUpstreamConfig(upstreamType string, raw json.RawMessage) error {
 		if strings.TrimSpace(cfg.AccessKeyID) == "" || strings.TrimSpace(cfg.SecretAccessKey) == "" {
 			return errors.New("s3 access_key_id and secret_access_key are required")
 		}
+	case "r2":
+		var cfg storage.R2Config
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return fmt.Errorf("invalid r2 config JSON: %w", err)
+		}
+		if strings.TrimSpace(cfg.Bucket) == "" {
+			return errors.New("r2 bucket is required")
+		}
+		if strings.TrimSpace(cfg.AccessKeyID) == "" || strings.TrimSpace(cfg.SecretAccessKey) == "" {
+			return errors.New("r2 access_key_id and secret_access_key are required")
+		}
+		if _, err := storage.ResolveR2Endpoint(cfg); err != nil {
+			return err
+		}
+	case "gcs":
+		var cfg storage.GCSConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return fmt.Errorf("invalid gcs config JSON: %w", err)
+		}
+		if strings.TrimSpace(cfg.Bucket) == "" {
+			return errors.New("gcs bucket is required")
+		}
+		if err := gcs.ValidateServiceAccountJSON(cfg.ServiceAccountJSON); err != nil {
+			return err
+		}
 	case "dropbox":
 		var cfg storage.DropboxConfig
 		if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -588,6 +632,36 @@ func mergeUpstreamConfigSecrets(upstreamType string, existingRaw, incomingRaw js
 		}
 		if isMaskedPlaceholder(newCfg.SecretAccessKey) {
 			newCfg.SecretAccessKey = oldCfg.SecretAccessKey
+		}
+		return json.Marshal(newCfg)
+	case "r2":
+		var oldCfg, newCfg storage.R2Config
+		_ = json.Unmarshal(existingRaw, &oldCfg)
+		if err := json.Unmarshal(incomingRaw, &newCfg); err != nil {
+			return nil, err
+		}
+		if isMaskedPlaceholder(newCfg.SecretAccessKey) {
+			newCfg.SecretAccessKey = oldCfg.SecretAccessKey
+		}
+		return json.Marshal(newCfg)
+	case "gcs":
+		var oldCfg, newCfg storage.GCSConfig
+		_ = json.Unmarshal(existingRaw, &oldCfg)
+		if err := json.Unmarshal(incomingRaw, &newCfg); err != nil {
+			return nil, err
+		}
+		if isMaskedPlaceholder(newCfg.ServiceAccountJSON) {
+			newCfg.ServiceAccountJSON = oldCfg.ServiceAccountJSON
+		}
+		if newCfg.APIBaseURL == "" {
+			newCfg.APIBaseURL = oldCfg.APIBaseURL
+		}
+		if newCfg.TokenURL == "" {
+			newCfg.TokenURL = oldCfg.TokenURL
+		}
+		if p, e, err := storage.ParseGCSServiceAccountSummary(newCfg.ServiceAccountJSON); err == nil {
+			newCfg.ProjectID = p
+			newCfg.ClientEmail = e
 		}
 		return json.Marshal(newCfg)
 	case "dropbox":
@@ -742,9 +816,14 @@ func (s *Server) handleTestUpstreamProxy(w http.ResponseWriter, r *http.Request)
 
 	targetURL := strings.TrimSpace(req.TargetURL)
 	if targetURL == "" {
-		if strings.EqualFold(strings.TrimSpace(req.UpstreamType), "s3") {
+		switch strings.ToLower(strings.TrimSpace(req.UpstreamType)) {
+		case "s3":
 			targetURL = "https://s3.amazonaws.com"
-		} else {
+		case "r2":
+			targetURL = "https://r2.cloudflarestorage.com"
+		case "gcs":
+			targetURL = "https://storage.googleapis.com"
+		default:
 			targetURL = "https://api.dropboxapi.com"
 		}
 	}

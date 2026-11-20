@@ -110,7 +110,7 @@ export const MigrationPage: React.FC = () => {
             <span>导出环境迁移包（.skbundle）</span>
           </div>
           <p className="text-xs text-slate-500">
-            所有上游密钥、Dropbox Token、SMTP 密码与代理密码将使用临时迁移口令重加密打包；客户 API Key 哈希保留，迁移后客户端无需更换密钥。
+            所有上游密钥（S3 / R2 Secret、GCS 服务账号密钥、Dropbox Token）、SMTP 密码与代理密码将使用临时迁移口令重加密打包；客户 API Key 哈希保留，迁移后客户端无需更换密钥。
           </p>
           <form onSubmit={handleExport} className="space-y-3 text-sm">
             <div className="space-y-1.5 text-xs">

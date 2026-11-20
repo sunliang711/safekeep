@@ -86,9 +86,13 @@ export const api = {
   startDropboxOAuth: (id: string) =>
     req<{ authorize_url: string; redirect_uri: string }>(`/admin/api/v1/upstreams/${id}/oauth/dropbox/start`),
   revealUpstreamSecrets: (id: string) =>
-    req<{ secret_access_key?: string; app_secret?: string; refresh_token?: string; proxy_password?: string }>(
-      `/admin/api/v1/upstreams/${id}/secrets`
-    ),
+    req<{
+      secret_access_key?: string
+      service_account_json?: string
+      app_secret?: string
+      refresh_token?: string
+      proxy_password?: string
+    }>(`/admin/api/v1/upstreams/${id}/secrets`),
 
   listClients: () => req<{ items: Client[] }>('/admin/api/v1/clients'),
   createClient: (payload: any) =>

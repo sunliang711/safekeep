@@ -14,6 +14,8 @@ interface SecretFieldProps {
   required?: boolean
   placeholder?: string
   autoComplete?: string
+  multiline?: boolean
+  rows?: number
 }
 
 export const SecretField: React.FC<SecretFieldProps> = ({
@@ -27,6 +29,8 @@ export const SecretField: React.FC<SecretFieldProps> = ({
   required = false,
   placeholder,
   autoComplete = 'off',
+  multiline = false,
+  rows = 4,
 }) => {
   const toast = useToast()
   const [editing, setEditing] = useState(false)
@@ -110,43 +114,57 @@ export const SecretField: React.FC<SecretFieldProps> = ({
 
   const canRevealOrCopy = !disabled && (hasSaved || value !== '')
 
+  const commonProps = {
+    id,
+    autoComplete,
+    required,
+    disabled,
+    readOnly,
+    value: displayValue,
+    placeholder:
+      placeholder ?? (hasSaved ? (readOnly ? '点击右侧查看或复制' : '留空则保持不变，点击直接输入新值') : '请输入'),
+    onFocus: () => {
+      if (!disabled && !readOnly && hasSaved && !editing) {
+        setEditing(true)
+        onChange('')
+      }
+    },
+    onBlur: () => {
+      if (editing && value === '' && hasSaved) {
+        setEditing(false)
+      }
+    },
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      if (readOnly) return
+      if (!editing) setEditing(true)
+      onChange(e.target.value)
+    },
+  }
+
   return (
-    <div className="flex items-center gap-1.5">
+    <div className={`flex ${multiline ? 'items-start' : 'items-center'} gap-1.5`}>
       <div className="relative flex-1 min-w-0">
-        <input
-          id={id}
-          autoComplete={autoComplete}
-          type={showingSavedMask ? 'text' : showPlain ? 'text' : 'password'}
-          required={required}
-          disabled={disabled}
-          readOnly={readOnly}
-          value={displayValue}
-          placeholder={placeholder ?? (hasSaved ? (readOnly ? '点击右侧查看或复制' : '留空则保持不变，点击直接输入新值') : '请输入')}
-          onFocus={() => {
-            if (!disabled && !readOnly && hasSaved && !editing) {
-              setEditing(true)
-              onChange('')
-            }
-          }}
-          onBlur={() => {
-            if (editing && value === '' && hasSaved) {
-              setEditing(false)
-            }
-          }}
-          onChange={(e) => {
-            if (readOnly) return
-            if (!editing) setEditing(true)
-            onChange(e.target.value)
-          }}
-          className="w-full px-3 py-1.5 pr-8 border rounded-lg font-mono text-xs disabled:bg-slate-100"
-        />
+        {multiline ? (
+          <textarea
+            {...commonProps}
+            rows={showingSavedMask && !showPlain ? 2 : rows}
+            style={!showingSavedMask && !showPlain ? ({ WebkitTextSecurity: 'disc' } as React.CSSProperties) : undefined}
+            className="w-full px-3 py-1.5 pr-8 border rounded-lg font-mono text-xs disabled:bg-slate-100"
+          />
+        ) : (
+          <input
+            {...commonProps}
+            type={showingSavedMask ? 'text' : showPlain ? 'text' : 'password'}
+            className="w-full px-3 py-1.5 pr-8 border rounded-lg font-mono text-xs disabled:bg-slate-100"
+          />
+        )}
         <button
           type="button"
           disabled={!canRevealOrCopy || revealing}
           onClick={handleToggleVisibility}
           title={showPlain ? '隐藏内容' : '查看具体值'}
           aria-label={showPlain ? '隐藏内容' : '查看具体值'}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 disabled:opacity-30"
+          className={`absolute right-2 ${multiline ? 'top-2' : 'top-1/2 -translate-y-1/2'} text-slate-400 hover:text-slate-700 disabled:opacity-30`}
         >
           {revealing ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />

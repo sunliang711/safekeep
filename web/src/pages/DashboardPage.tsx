@@ -62,7 +62,7 @@ export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({
       <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50 via-white to-white p-6 sm:p-7 flex flex-wrap items-center justify-between gap-5">
         <div className="flex gap-4 items-center">
           <div className="hidden sm:grid w-12 h-12 place-items-center rounded-2xl bg-white border border-indigo-100 text-indigo-500"><ShieldCheck className="w-7 h-7" /></div>
-          <div><div className="text-xs font-medium text-indigo-500 mb-1.5">你的备份工作空间</div><h2 className="text-lg font-semibold text-slate-900">{data.enabled_upstreams > 0 ? '备份状态，一目了然' : '从连接第一个云端存储开始'}</h2><p className="text-xs text-slate-500 mt-2">{data.enabled_upstreams > 0 ? '集中查看任务进度与存储状态，随时找回所需文件。' : '连接 S3 或 Dropbox，创建客户策略，即可开始安全备份。'}</p></div>
+          <div><div className="text-xs font-medium text-indigo-500 mb-1.5">你的备份工作空间</div><h2 className="text-lg font-semibold text-slate-900">{data.enabled_upstreams > 0 ? '备份状态，一目了然' : '从连接第一个云端存储开始'}</h2><p className="text-xs text-slate-500 mt-2">{data.enabled_upstreams > 0 ? '集中查看任务进度与存储状态，随时找回所需文件。' : '连接 S3、Cloudflare R2、Google Cloud Storage 或 Dropbox，创建客户策略，即可开始安全备份。'}</p></div>
         </div>
         <button className="primary-button" onClick={() => onNavigate(data.enabled_upstreams > 0 ? 'tasks' : 'upstreams')}>{data.enabled_upstreams > 0 ? <Upload className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}{data.enabled_upstreams > 0 ? '管理备份文件' : '连接上游存储'}<ArrowRight className="w-3.5 h-3.5" /></button>
       </div>

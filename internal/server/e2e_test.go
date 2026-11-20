@@ -4,12 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"mime"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -32,6 +37,8 @@ import (
 	"safekeep/internal/scheduler"
 	"safekeep/internal/storage"
 	"safekeep/internal/storage/dropbox"
+	"safekeep/internal/storage/gcs"
+	"safekeep/internal/storage/r2"
 	"safekeep/internal/storage/s3"
 	"safekeep/web"
 )
@@ -59,6 +66,8 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	reg := storage.NewRegistry(store, cipher)
 	reg.RegisterBuilder("s3", s3.Builder)
+	reg.RegisterBuilder("r2", r2.Builder)
+	reg.RegisterBuilder("gcs", gcs.Builder)
 	reg.RegisterBuilder("dropbox", dropbox.Builder)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -1068,5 +1077,290 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	}
 	if _, err := env.migSvc.Inspect(context.Background(), gotExtBundle, "ext-pass-99"); err != nil {
 		t.Fatalf("expected external bundle decryptable with ext-pass-99: %v", err)
+	}
+}
+
+func TestR2AndGCSEndToEnd(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Setup admin
+	initResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/setup/init", map[string]string{
+		"username": "admin",
+		"password": "password123",
+	})
+	initResp.Body.Close()
+	if initResp.StatusCode != http.StatusCreated {
+		t.Fatalf("setup init failed: %d", initResp.StatusCode)
+	}
+
+	// Mock Cloudflare R2 server (S3 compatible)
+	var r2Mu sync.Mutex
+	r2Objects := map[string][]byte{}
+	mockR2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/r2-bucket/")
+		switch r.Method {
+		case http.MethodHead:
+			w.WriteHeader(http.StatusOK)
+		case http.MethodPut:
+			b, _ := io.ReadAll(r.Body)
+			r2Mu.Lock()
+			r2Objects[key] = b
+			r2Mu.Unlock()
+			w.Header().Set("ETag", `"r2-etag"`)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			r2Mu.Lock()
+			b, ok := r2Objects[key]
+			r2Mu.Unlock()
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(b)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer mockR2.Close()
+
+	// Generate RSA key for mock GCS service account
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	var gcsMu sync.Mutex
+	gcsObjects := map[string][]byte{}
+	var mockGCSURL string
+	mockGCS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "gcs-tok-1",
+				"expires_in":   3600,
+			})
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer gcs-tok-1" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/gcs-bucket" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"name": "gcs-bucket"})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/upload/storage/v1/b/gcs-bucket/o" {
+			_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			mr := multipart.NewReader(r.Body, params["boundary"])
+			p1, _ := mr.NextPart()
+			var meta struct {
+				Name string `json:"name"`
+			}
+			_ = json.NewDecoder(p1).Decode(&meta)
+			p2, _ := mr.NextPart()
+			data, _ := io.ReadAll(p2)
+			gcsMu.Lock()
+			gcsObjects[meta.Name] = data
+			gcsMu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"name":       meta.Name,
+				"etag":       `"gcs-etag"`,
+				"generation": "99",
+			})
+			return
+		}
+		const objPrefix = "/storage/v1/b/gcs-bucket/o/"
+		if r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, objPrefix) {
+			raw := strings.TrimPrefix(r.RequestURI, objPrefix)
+			if idx := strings.IndexByte(raw, '?'); idx >= 0 {
+				raw = raw[:idx]
+			}
+			objName, _ := url.PathUnescape(raw)
+			gcsMu.Lock()
+			b, ok := gcsObjects[objName]
+			gcsMu.Unlock()
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write(b)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockGCS.Close()
+	mockGCSURL = mockGCS.URL
+
+	saBytes, _ := json.Marshal(map[string]string{
+		"type":           "service_account",
+		"project_id":     "demo-proj",
+		"private_key_id": "k1",
+		"private_key":    string(pemBytes),
+		"client_email":   "svc@demo-proj.iam.gserviceaccount.com",
+		"token_uri":      mockGCSURL + "/token",
+	})
+
+	// 1. Create R2 upstream
+	r2Resp := env.adminReq(t, http.MethodPost, "/admin/api/v1/upstreams", map[string]any{
+		"name":    "prod-r2",
+		"type":    "r2",
+		"enabled": true,
+		"config": map[string]any{
+			"account_id":        "cf-acct-01",
+			"endpoint":          mockR2.URL,
+			"bucket":            "r2-bucket",
+			"access_key_id":     "r2-ak",
+			"secret_access_key": "r2-sk",
+			"base_prefix":       "r2-root",
+			"force_path_style":  true,
+		},
+	})
+	var upR2 struct {
+		ID     string         `json:"id"`
+		Config map[string]any `json:"config"`
+	}
+	_ = json.NewDecoder(r2Resp.Body).Decode(&upR2)
+	r2Resp.Body.Close()
+	if r2Resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create r2 upstream failed: %d", r2Resp.StatusCode)
+	}
+	if upR2.Config["has_secret_key"] != true || upR2.Config["region"] != "auto" {
+		t.Fatalf("unexpected r2 masked config: %+v", upR2.Config)
+	}
+
+	// 2. Create GCS upstream
+	gcsResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/upstreams", map[string]any{
+		"name":    "prod-gcs",
+		"type":    "gcs",
+		"enabled": true,
+		"config": map[string]any{
+			"bucket":               "gcs-bucket",
+			"service_account_json": string(saBytes),
+			"base_prefix":          "gcs-root",
+			"storage_class":        "NEARLINE",
+			"api_base_url":         mockGCSURL,
+		},
+	})
+	var upGCS struct {
+		ID     string         `json:"id"`
+		Config map[string]any `json:"config"`
+	}
+	_ = json.NewDecoder(gcsResp.Body).Decode(&upGCS)
+	gcsResp.Body.Close()
+	if gcsResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create gcs upstream failed: %d", gcsResp.StatusCode)
+	}
+	if upGCS.Config["has_service_account_json"] != true || upGCS.Config["client_email"] != "svc@demo-proj.iam.gserviceaccount.com" {
+		t.Fatalf("unexpected gcs masked config: %+v", upGCS.Config)
+	}
+
+	// 3. Reveal secrets and update with masked placeholder
+	r2SecretResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/upstreams/"+upR2.ID+"/secrets", nil)
+	var r2Secrets map[string]string
+	_ = json.NewDecoder(r2SecretResp.Body).Decode(&r2Secrets)
+	r2SecretResp.Body.Close()
+	if r2Secrets["secret_access_key"] != "r2-sk" {
+		t.Fatalf("expected r2 secret_access_key revealed, got %+v", r2Secrets)
+	}
+
+	gcsSecretResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/upstreams/"+upGCS.ID+"/secrets", nil)
+	var gcsSecrets map[string]string
+	_ = json.NewDecoder(gcsSecretResp.Body).Decode(&gcsSecrets)
+	gcsSecretResp.Body.Close()
+	if gcsSecrets["service_account_json"] != string(saBytes) {
+		t.Fatalf("expected gcs service_account_json revealed")
+	}
+
+	updGCSResp := env.adminReq(t, http.MethodPut, "/admin/api/v1/upstreams/"+upGCS.ID, map[string]any{
+		"name":    "prod-gcs",
+		"type":    "gcs",
+		"enabled": true,
+		"config": map[string]any{
+			"bucket":               "gcs-bucket",
+			"service_account_json": "*****",
+			"base_prefix":          "gcs-root",
+			"storage_class":        "COLDLINE",
+		},
+	})
+	updGCSResp.Body.Close()
+	if updGCSResp.StatusCode != http.StatusOK {
+		t.Fatalf("update gcs with masked secret failed: %d", updGCSResp.StatusCode)
+	}
+
+	// 4. Test connections
+	tR2 := env.adminReq(t, http.MethodPost, "/admin/api/v1/upstreams/"+upR2.ID+"/test", nil)
+	var trR2 map[string]any
+	_ = json.NewDecoder(tR2.Body).Decode(&trR2)
+	tR2.Body.Close()
+	if trR2["status"] != "ok" {
+		t.Fatalf("r2 test failed: %+v", trR2)
+	}
+
+	tGCS := env.adminReq(t, http.MethodPost, "/admin/api/v1/upstreams/"+upGCS.ID+"/test", nil)
+	var trGCS map[string]any
+	_ = json.NewDecoder(tGCS.Body).Decode(&trGCS)
+	tGCS.Body.Close()
+	if trGCS["status"] != "ok" {
+		t.Fatalf("gcs test failed: %+v", trGCS)
+	}
+
+	// 5. Create client bound to R2 & GCS, upload sync, and verify download
+	clResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/clients", map[string]any{
+		"name":         "multi-cloud-app",
+		"enabled":      true,
+		"default_mode": "sync",
+		"path_prefix":  "mc",
+		"upstreams": []map[string]any{
+			{"upstream_id": upR2.ID, "is_default": true, "priority": 10},
+			{"upstream_id": upGCS.ID, "is_default": true, "priority": 20},
+		},
+	})
+	var clOut struct {
+		APIKey string `json:"api_key"`
+	}
+	_ = json.NewDecoder(clResp.Body).Decode(&clOut)
+	clResp.Body.Close()
+
+	payload := []byte("r2 and gcs backup payload")
+	upResp := uploadMultipart(t, env.srv.URL+"/api/v1/backups?mode=sync&path=daily", clOut.APIKey, "snap.txt", payload)
+	var upOut struct {
+		Task db.BackupTask `json:"task"`
+	}
+	_ = json.NewDecoder(upResp.Body).Decode(&upOut)
+	upResp.Body.Close()
+	if upResp.StatusCode != http.StatusOK || upOut.Task.Status != "succeeded" {
+		t.Fatalf("sync backup failed: code=%d task=%+v", upResp.StatusCode, upOut.Task)
+	}
+
+	r2Mu.Lock()
+	_, r2Has := r2Objects["r2-root/mc/daily/snap.txt"]
+	r2Mu.Unlock()
+	if !r2Has {
+		t.Fatalf("expected r2 key r2-root/mc/daily/snap.txt, got %v", r2Objects)
+	}
+
+	gcsMu.Lock()
+	_, gcsHas := gcsObjects["gcs-root/mc/daily/snap.txt"]
+	gcsMu.Unlock()
+	if !gcsHas {
+		t.Fatalf("expected gcs key gcs-root/mc/daily/snap.txt, got %v", gcsObjects)
+	}
+
+	dlReq, _ := http.NewRequest(http.MethodGet, env.srv.URL+"/api/v1/backups/"+upOut.Task.ID+"/download?upstream=prod-gcs", nil)
+	dlReq.Header.Set("X-API-Key", clOut.APIKey)
+	dlResp, err := http.DefaultClient.Do(dlReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dlBytes, _ := io.ReadAll(dlResp.Body)
+	dlResp.Body.Close()
+	if dlResp.StatusCode != http.StatusOK || string(dlBytes) != string(payload) {
+		t.Fatalf("gcs download mismatch: status=%d body=%q", dlResp.StatusCode, dlBytes)
 	}
 }

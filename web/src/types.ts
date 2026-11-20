@@ -10,7 +10,7 @@ export interface Admin {
 export interface Upstream {
   id: string;
   name: string;
-  type: 's3' | 'dropbox';
+  type: 's3' | 'r2' | 'gcs' | 'dropbox';
   enabled: boolean;
   config: Record<string, any>;
   proxy_enabled: boolean;

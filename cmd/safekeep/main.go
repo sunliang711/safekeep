@@ -24,6 +24,8 @@ import (
 	"safekeep/internal/server"
 	"safekeep/internal/storage"
 	"safekeep/internal/storage/dropbox"
+	"safekeep/internal/storage/gcs"
+	"safekeep/internal/storage/r2"
 	"safekeep/internal/storage/s3"
 	"safekeep/web"
 )
@@ -108,6 +110,8 @@ func main() {
 
 	registry := storage.NewRegistry(store, cipher)
 	registry.RegisterBuilder("s3", s3.Builder)
+	registry.RegisterBuilder("r2", r2.Builder)
+	registry.RegisterBuilder("gcs", gcs.Builder)
 	registry.RegisterBuilder("dropbox", dropbox.Builder)
 
 	auditLog := audit.NewLogger(store)

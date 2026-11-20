@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { CheckCircle2, Copy, Link2, Loader2, Plus, Trash2, Wifi, XCircle } from 'lucide-react'
+import { CheckCircle2, Copy, Link2, Loader2, Plus, Trash2, Upload, Wifi, XCircle } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
 import { SecretField } from '../components/SecretField'
@@ -12,9 +12,11 @@ import type { Upstream } from '../types'
 interface FormState {
   id?: string
   name: string
-  type: 's3' | 'dropbox'
+  type: 's3' | 'r2' | 'gcs' | 'dropbox'
   enabled: boolean
-  // S3
+  // S3 & R2
+  account_id: string
+  jurisdiction: string
   endpoint: string
   region: string
   bucket: string
@@ -23,6 +25,8 @@ interface FormState {
   base_prefix: string
   force_path_style: boolean
   storage_class: string
+  // GCS
+  service_account_json: string
   // Dropbox
   app_key: string
   app_secret: string
@@ -42,6 +46,8 @@ const emptyForm = (): FormState => ({
   name: '',
   type: 's3',
   enabled: true,
+  account_id: '',
+  jurisdiction: '',
   endpoint: '',
   region: 'us-east-1',
   bucket: '',
@@ -50,6 +56,7 @@ const emptyForm = (): FormState => ({
   base_prefix: '',
   force_path_style: false,
   storage_class: '',
+  service_account_json: '',
   app_key: '',
   app_secret: '',
   refresh_token: '',
@@ -78,6 +85,7 @@ export const UpstreamsPage: React.FC = () => {
   const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; text: string } | null>(null)
   const [savedSecretFlags, setSavedSecretFlags] = useState({
     secretKey: false,
+    serviceAccountJSON: false,
     appSecret: false,
     refreshToken: false,
     proxyPass: false,
@@ -114,14 +122,17 @@ export const UpstreamsPage: React.FC = () => {
       name: u.name,
       type: u.type,
       enabled: u.enabled,
+      account_id: u.config.account_id || '',
+      jurisdiction: u.config.jurisdiction || '',
       endpoint: u.config.endpoint || '',
-      region: u.config.region || 'us-east-1',
+      region: u.config.region || (u.type === 'r2' ? 'auto' : 'us-east-1'),
       bucket: u.config.bucket || '',
       access_key_id: u.config.access_key_id || '',
       secret_access_key: '',
       base_prefix: u.config.base_prefix || '',
       force_path_style: Boolean(u.config.force_path_style),
       storage_class: u.config.storage_class || '',
+      service_account_json: '',
       app_key: u.config.app_key || '',
       app_secret: '',
       refresh_token: '',
@@ -138,6 +149,7 @@ export const UpstreamsPage: React.FC = () => {
     setInitialFormSnap(JSON.stringify(nextForm))
     setSavedSecretFlags({
       secretKey: Boolean(u.config?.has_secret_key),
+      serviceAccountJSON: Boolean(u.config?.has_service_account_json),
       appSecret: Boolean(u.config?.has_app_secret),
       refreshToken: Boolean(u.config?.has_refresh_token),
       proxyPass: Boolean(u.has_proxy_password),
@@ -149,6 +161,19 @@ export const UpstreamsPage: React.FC = () => {
 
   const defaultProxyTestURL = () => {
     if (form.type === 'dropbox') return 'https://api.dropboxapi.com'
+    if (form.type === 'gcs') return 'https://storage.googleapis.com'
+    if (form.type === 'r2') {
+      const ep = form.endpoint.trim()
+      if (ep) return /^https?:\/\//i.test(ep) ? ep : `https://${ep}`
+      const acct = form.account_id.trim()
+      if (acct) {
+        const jur = form.jurisdiction.trim().toLowerCase()
+        if (jur === 'eu') return `https://${acct}.eu.r2.cloudflarestorage.com`
+        if (jur === 'fedramp') return `https://${acct}.fedramp.r2.cloudflarestorage.com`
+        return `https://${acct}.r2.cloudflarestorage.com`
+      }
+      return 'https://r2.cloudflarestorage.com'
+    }
     const ep = form.endpoint.trim()
     if (!ep) return 'https://s3.amazonaws.com'
     return /^https?:\/\//i.test(ep) ? ep : `https://${ep}`
@@ -201,24 +226,46 @@ export const UpstreamsPage: React.FC = () => {
     if (saving || (form.id && !upstreamDirty)) return
     setModalErr('')
     setSaving(true)
-    const config =
-      form.type === 's3'
-        ? {
-            endpoint: form.endpoint,
-            region: form.region,
-            bucket: form.bucket,
-            access_key_id: form.access_key_id,
-            secret_access_key: form.secret_access_key,
-            base_prefix: form.base_prefix,
-            force_path_style: form.force_path_style,
-            storage_class: form.storage_class,
-          }
-        : {
-            app_key: form.app_key,
-            app_secret: form.app_secret,
-            refresh_token: form.refresh_token,
-            root_path: form.root_path,
-          }
+    let config: Record<string, any>
+    if (form.type === 's3') {
+      config = {
+        endpoint: form.endpoint,
+        region: form.region,
+        bucket: form.bucket,
+        access_key_id: form.access_key_id,
+        secret_access_key: form.secret_access_key,
+        base_prefix: form.base_prefix,
+        force_path_style: form.force_path_style,
+        storage_class: form.storage_class,
+      }
+    } else if (form.type === 'r2') {
+      config = {
+        account_id: form.account_id,
+        jurisdiction: form.jurisdiction,
+        endpoint: form.endpoint,
+        region: form.region || 'auto',
+        bucket: form.bucket,
+        access_key_id: form.access_key_id,
+        secret_access_key: form.secret_access_key,
+        base_prefix: form.base_prefix,
+        force_path_style: form.force_path_style,
+        storage_class: form.storage_class,
+      }
+    } else if (form.type === 'gcs') {
+      config = {
+        bucket: form.bucket,
+        service_account_json: form.service_account_json,
+        base_prefix: form.base_prefix,
+        storage_class: form.storage_class,
+      }
+    } else {
+      config = {
+        app_key: form.app_key,
+        app_secret: form.app_secret,
+        refresh_token: form.refresh_token,
+        root_path: form.root_path,
+      }
+    }
 
     const payload: any = {
       name: form.name,
@@ -295,7 +342,7 @@ export const UpstreamsPage: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-slate-900">上游存储与网络代理</h1>
-          <p className="text-sm text-slate-500">管理 S3 / Dropbox 上游，支持为每个上游单独配置 HTTP / SOCKS5 代理</p>
+          <p className="text-sm text-slate-500">管理 S3 / Cloudflare R2 / Google Cloud Storage / Dropbox 上游，支持为每个上游单独配置 HTTP / SOCKS5 代理</p>
         </div>
         <button
           onClick={() => {
@@ -303,7 +350,7 @@ export const UpstreamsPage: React.FC = () => {
             const next = emptyForm()
             setForm(next)
             setInitialFormSnap(JSON.stringify(next))
-            setSavedSecretFlags({ secretKey: false, appSecret: false, refreshToken: false, proxyPass: false })
+            setSavedSecretFlags({ secretKey: false, serviceAccountJSON: false, appSecret: false, refreshToken: false, proxyPass: false })
             setProxyTestResult(null)
             setProxyTargetURL('')
             setModalOpen(true)
@@ -318,11 +365,11 @@ export const UpstreamsPage: React.FC = () => {
         <LoadingState label="正在读取上游存储…" />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {items.length === 0 && <div className="md:col-span-2 bg-white rounded-xl border border-slate-200"><EmptyState title="连接你的第一个云端存储" description="支持 Amazon S3、兼容对象存储与 Dropbox。每个上游都可以独立配置网络代理。" action={<button className="primary-button" onClick={() => {
+          {items.length === 0 && <div className="md:col-span-2 bg-white rounded-xl border border-slate-200"><EmptyState title="连接你的第一个云端存储" description="支持 Amazon S3、Cloudflare R2、Google Cloud Storage (GCS) 与 Dropbox。每个上游都可以独立配置网络代理。" action={<button className="primary-button" onClick={() => {
             const next = emptyForm()
             setForm(next)
             setInitialFormSnap(JSON.stringify(next))
-            setSavedSecretFlags({ secretKey: false, appSecret: false, refreshToken: false, proxyPass: false })
+            setSavedSecretFlags({ secretKey: false, serviceAccountJSON: false, appSecret: false, refreshToken: false, proxyPass: false })
             setProxyTestResult(null)
             setProxyTargetURL('')
             setModalErr('')
@@ -335,7 +382,7 @@ export const UpstreamsPage: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-slate-900">{u.name}</span>
                     <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono">
-                      {u.type.toUpperCase()}
+                      {u.type === 'gcs' ? 'GCS' : u.type === 'r2' ? 'R2' : u.type.toUpperCase()}
                     </span>
                     <StatusBadge value={u.enabled ? 'enabled' : 'disabled'} label={u.enabled ? '启用' : '禁用'} />
                   </div>
@@ -349,6 +396,23 @@ export const UpstreamsPage: React.FC = () => {
                   <>
                     <div>Bucket: <span className="font-mono">{u.config.bucket}</span> ({u.config.region || 'us-east-1'})</div>
                     {u.config.endpoint && <div>Endpoint: <span className="font-mono">{u.config.endpoint}</span></div>}
+                    {u.config.base_prefix && <div>前缀: <span className="font-mono">{u.config.base_prefix}</span></div>}
+                  </>
+                ) : u.type === 'r2' ? (
+                  <>
+                    <div>Bucket: <span className="font-mono">{u.config.bucket}</span> ({u.config.region || 'auto'})</div>
+                    {u.config.account_id && <div>Account ID: <span className="font-mono">{u.config.account_id}</span>{u.config.jurisdiction ? ` (${u.config.jurisdiction.toUpperCase()})` : ''}</div>}
+                    {(u.config.resolved_endpoint || u.config.endpoint) && (
+                      <div>Endpoint: <span className="font-mono break-all">{u.config.resolved_endpoint || u.config.endpoint}</span></div>
+                    )}
+                    {u.config.base_prefix && <div>前缀: <span className="font-mono">{u.config.base_prefix}</span></div>}
+                  </>
+                ) : u.type === 'gcs' ? (
+                  <>
+                    <div>Bucket: <span className="font-mono">{u.config.bucket}</span></div>
+                    {u.config.project_id && <div>Project ID: <span className="font-mono">{u.config.project_id}</span></div>}
+                    {u.config.client_email && <div>Service Account: <span className="font-mono break-all">{u.config.client_email}</span></div>}
+                    {u.config.storage_class && <div>Storage Class: <span className="font-mono">{u.config.storage_class}</span></div>}
                     {u.config.base_prefix && <div>前缀: <span className="font-mono">{u.config.base_prefix}</span></div>}
                   </>
                 ) : (
@@ -533,10 +597,19 @@ export const UpstreamsPage: React.FC = () => {
                   <select id="upstreams-field-2"
                     disabled={Boolean(form.id)}
                     value={form.type}
-                    onChange={(e) => setForm({ ...form, type: e.target.value as any })}
+                    onChange={(e) => {
+                      const nextType = e.target.value as FormState['type']
+                      setForm((prev) => ({
+                        ...prev,
+                        type: nextType,
+                        region: nextType === 'r2' ? (prev.region === 'us-east-1' || !prev.region ? 'auto' : prev.region) : nextType === 's3' ? (prev.region === 'auto' || !prev.region ? 'us-east-1' : prev.region) : prev.region,
+                      }))
+                    }}
                     className="w-full px-3 py-2 border rounded-lg bg-white"
                   >
                     <option value="s3">Amazon S3 / 兼容对象存储</option>
+                    <option value="r2">Cloudflare R2</option>
+                    <option value="gcs">Google Cloud Storage (GCS)</option>
                     <option value="dropbox">Dropbox</option>
                   </select>
                 </div>
@@ -564,7 +637,7 @@ export const UpstreamsPage: React.FC = () => {
                       <input id="upstreams-field-4" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-5" className="block text-xs text-slate-600 mb-1">Endpoint（MinIO/R2/OSS 可选）</label>
+                      <label htmlFor="upstreams-field-5" className="block text-xs text-slate-600 mb-1">Endpoint（MinIO/OSS 等可选）</label>
                       <input id="upstreams-field-5" value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
@@ -595,6 +668,124 @@ export const UpstreamsPage: React.FC = () => {
                     <input type="checkbox" checked={form.force_path_style} onChange={(e) => setForm({ ...form, force_path_style: e.target.checked })} />
                     <span>Force Path Style（MinIO / 自建 S3 推荐开启）</span>
                   </label>
+                </div>
+              ) : form.type === 'r2' ? (
+                <div className="border-t pt-4 space-y-3">
+                  <div className="font-semibold text-slate-800">Cloudflare R2 参数</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="upstreams-r2-account" className="block text-xs text-slate-600 mb-1">Cloudflare Account ID {form.endpoint.trim() ? '（可选）' : '*'}</label>
+                      <input id="upstreams-r2-account" required={!form.endpoint.trim()} value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })} placeholder="32 位 Account ID" className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-r2-jurisdiction" className="block text-xs text-slate-600 mb-1">管辖区（Jurisdiction）</label>
+                      <select id="upstreams-r2-jurisdiction" value={form.jurisdiction} onChange={(e) => setForm({ ...form, jurisdiction: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg bg-white text-xs">
+                        <option value="">默认（全球）</option>
+                        <option value="eu">欧盟（EU）</option>
+                        <option value="fedramp">FedRAMP</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-r2-bucket" className="block text-xs text-slate-600 mb-1">Bucket *</label>
+                      <input id="upstreams-r2-bucket" required value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-r2-region" className="block text-xs text-slate-600 mb-1">Region（默认 auto）</label>
+                      <input id="upstreams-r2-region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="auto" className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-r2-endpoint" className="block text-xs text-slate-600 mb-1">自定义 Endpoint（留空自动按 Account ID 生成）</label>
+                      <input id="upstreams-r2-endpoint" value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="https://<account_id>.r2.cloudflarestorage.com" className="w-full px-3 py-1.5 border rounded-lg text-xs font-mono" />
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-r2-prefix" className="block text-xs text-slate-600 mb-1">全局路径前缀</label>
+                      <input id="upstreams-r2-prefix" value={form.base_prefix} onChange={(e) => setForm({ ...form, base_prefix: e.target.value })} placeholder="backups/" className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-r2-ak" className="block text-xs text-slate-600 mb-1">R2 Access Key ID *</label>
+                      <input id="upstreams-r2-ak" required value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-r2-sk" className="block text-xs text-slate-600 mb-1">R2 Secret Access Key {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}</label>
+                      <SecretField
+                        id="upstreams-r2-sk"
+                        required={!form.id}
+                        hasSaved={Boolean(form.id && savedSecretFlags.secretKey)}
+                        value={form.secret_access_key}
+                        onChange={(v) => setForm({ ...form, secret_access_key: v })}
+                        onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).secret_access_key || '' : undefined}
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label htmlFor="upstreams-r2-sc" className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD / STANDARD_IA）</label>
+                      <input id="upstreams-r2-sc" value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={form.force_path_style} onChange={(e) => setForm({ ...form, force_path_style: e.target.checked })} />
+                    <span>Force Path Style（一般保持关闭，自定义网关或本地测试时可开启）</span>
+                  </label>
+                </div>
+              ) : form.type === 'gcs' ? (
+                <div className="border-t pt-4 space-y-3">
+                  <div className="font-semibold text-slate-800">Google Cloud Storage (GCS) 参数</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="upstreams-gcs-bucket" className="block text-xs text-slate-600 mb-1">Bucket *</label>
+                      <input id="upstreams-gcs-bucket" required value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} placeholder="my-gcs-bucket" className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                    <div>
+                      <label htmlFor="upstreams-gcs-prefix" className="block text-xs text-slate-600 mb-1">全局路径前缀</label>
+                      <input id="upstreams-gcs-prefix" value={form.base_prefix} onChange={(e) => setForm({ ...form, base_prefix: e.target.value })} placeholder="backups/" className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                    <div className="col-span-2">
+                      <label htmlFor="upstreams-gcs-sc" className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD / NEARLINE / COLDLINE / ARCHIVE）</label>
+                      <input id="upstreams-gcs-sc" value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
+                    </div>
+                    <div className="col-span-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <label htmlFor="upstreams-gcs-sa" className="block text-xs text-slate-600">
+                          Service Account JSON 密钥 {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}
+                        </label>
+                        <label className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 cursor-pointer font-medium">
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>从 .json 文件导入</span>
+                          <input
+                            type="file"
+                            accept=".json,application/json"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0]
+                              e.target.value = ''
+                              if (!file) return
+                              try {
+                                const text = await file.text()
+                                JSON.parse(text)
+                                setForm((prev) => ({ ...prev, service_account_json: text }))
+                                toast.success(`已读取 ${file.name}`)
+                              } catch {
+                                toast.error('所选文件不是有效的 JSON 格式')
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <SecretField
+                        id="upstreams-gcs-sa"
+                        multiline
+                        rows={5}
+                        required={!form.id}
+                        hasSaved={Boolean(form.id && savedSecretFlags.serviceAccountJSON)}
+                        value={form.service_account_json}
+                        onChange={(v) => setForm({ ...form, service_account_json: v })}
+                        placeholder={form.id && savedSecretFlags.serviceAccountJSON ? '留空则保持不变，点击可直接粘贴新 Service Account JSON' : '{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'}
+                        onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).service_account_json || '' : undefined}
+                      />
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
+                    请在 GCP Console → IAM 与管理 → 服务账号 创建 JSON 密钥，并授予目标 Bucket 的 <b>Storage Object Admin</b>（或 <code className="font-mono">roles/storage.objectAdmin</code> + <code className="font-mono">storage.buckets.get</code>）权限。所有请求及 Token 交换均遵循下方代理配置。
+                  </div>
                 </div>
               ) : (
                 <div className="border-t pt-4 space-y-3">

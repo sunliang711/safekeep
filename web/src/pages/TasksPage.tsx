@@ -494,7 +494,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                   ) : (
                     <div className="space-y-2">
                       <div className="text-xs text-amber-800">
-                        当前尚未配置或启用任何上游存储（如 S3 / Dropbox），请先添加并启用上游存储。
+                        当前尚未配置或启用任何上游存储（如 S3 / R2 / GCS / Dropbox），请先添加并启用上游存储。
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {onNavigate && (

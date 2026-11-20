@@ -21,9 +21,10 @@ import (
 )
 
 type Provider struct {
-	cfg      storage.S3Config
-	client   *awss3.Client
-	uploader *manager.Uploader
+	providerType string
+	cfg          storage.S3Config
+	client       *awss3.Client
+	uploader     *manager.Uploader
 }
 
 // Builder implements storage.Builder for S3-compatible backends.
@@ -32,19 +33,31 @@ func Builder(ctx context.Context, _ *db.Upstream, cfgJSON []byte, pCfg proxy.Con
 	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("parse s3 config: %w", err)
 	}
+	return NewWithType(ctx, "s3", cfg, pCfg)
+}
+
+// NewWithType constructs an S3-compatible Provider with an explicit provider type label (e.g. "s3" or "r2").
+func NewWithType(ctx context.Context, providerType string, cfg storage.S3Config, pCfg proxy.Config) (*Provider, error) {
+	if providerType == "" {
+		providerType = "s3"
+	}
 	if strings.TrimSpace(cfg.Bucket) == "" {
-		return nil, fmt.Errorf("s3 bucket is required")
+		return nil, fmt.Errorf("%s bucket is required", providerType)
 	}
 	if strings.TrimSpace(cfg.AccessKeyID) == "" || strings.TrimSpace(cfg.SecretAccessKey) == "" {
-		return nil, fmt.Errorf("s3 access_key_id and secret_access_key are required")
+		return nil, fmt.Errorf("%s access_key_id and secret_access_key are required", providerType)
 	}
 	if strings.TrimSpace(cfg.Region) == "" {
-		cfg.Region = "us-east-1"
+		if providerType == "r2" {
+			cfg.Region = "auto"
+		} else {
+			cfg.Region = "us-east-1"
+		}
 	}
 
 	httpClient, err := proxy.NewHTTPClient(pCfg)
 	if err != nil {
-		return nil, fmt.Errorf("build s3 proxy client: %w", err)
+		return nil, fmt.Errorf("build %s proxy client: %w", providerType, err)
 	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
@@ -61,6 +74,10 @@ func Builder(ctx context.Context, _ *db.Upstream, cfgJSON []byte, pCfg proxy.Con
 			o.BaseEndpoint = aws.String(strings.TrimSpace(cfg.Endpoint))
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
+		if providerType == "r2" {
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		}
 	})
 
 	uploader := manager.NewUploader(client, func(u *manager.Uploader) {
@@ -69,13 +86,17 @@ func Builder(ctx context.Context, _ *db.Upstream, cfgJSON []byte, pCfg proxy.Con
 	})
 
 	return &Provider{
-		cfg:      cfg,
-		client:   client,
-		uploader: uploader,
+		providerType: providerType,
+		cfg:          cfg,
+		client:       client,
+		uploader:     uploader,
 	}, nil
 }
 
 func (p *Provider) Type() string {
+	if p.providerType != "" {
+		return p.providerType
+	}
 	return "s3"
 }
 
