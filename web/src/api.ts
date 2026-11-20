@@ -68,6 +68,21 @@ export const api = {
   deleteUpstream: (id: string) => req(`/admin/api/v1/upstreams/${id}`, { method: 'DELETE' }),
   testUpstream: (id: string) =>
     req<{ status: string; error?: string }>(`/admin/api/v1/upstreams/${id}/test`, { method: 'POST' }),
+  testUpstreamProxy: (payload: {
+    upstream_id?: string
+    upstream_type?: string
+    proxy_type: string
+    proxy_host: string
+    proxy_port: number
+    proxy_username?: string
+    proxy_password?: string
+    clear_proxy_password?: boolean
+    target_url?: string
+  }) =>
+    req<{ status: string; target_url?: string; http_status?: number; latency_ms?: number; error?: string }>(
+      '/admin/api/v1/upstreams/test-proxy',
+      { method: 'POST', body: JSON.stringify(payload) }
+    ),
   startDropboxOAuth: (id: string) =>
     req<{ authorize_url: string; redirect_uri: string }>(`/admin/api/v1/upstreams/${id}/oauth/dropbox/start`),
 

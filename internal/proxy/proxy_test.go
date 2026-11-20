@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -187,4 +188,49 @@ func TestProxyConfigValidate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	_ = strings.TrimSpace
+}
+
+func TestProxyTestConnectivity(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Proxy-Authorization") == "" {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, r.RequestURI, nil)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+	}))
+	defer proxySrv.Close()
+
+	pu, _ := url.Parse(proxySrv.URL)
+	host, portStr, _ := net.SplitHostPort(pu.Host)
+	port, _ := strconv.Atoi(portStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Missing credentials triggers 407 failure
+	if _, _, err := TestConnectivity(ctx, Config{Type: "http", Host: host, Port: port}, target.URL); err == nil {
+		t.Fatal("expected 407 proxy auth error")
+	}
+
+	// Valid credentials succeed
+	code, _, err := TestConnectivity(ctx, Config{Type: "http", Host: host, Port: port, Username: "u", Password: "p"}, target.URL)
+	if err != nil || code != http.StatusNoContent {
+		t.Fatalf("expected HTTP 204 via proxy, got code=%d err=%v", code, err)
+	}
 }

@@ -631,6 +631,110 @@ func (s *Server) handleTestUpstream(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
+type testProxyReq struct {
+	UpstreamID         string `json:"upstream_id"`
+	UpstreamType       string `json:"upstream_type"`
+	ProxyType          string `json:"proxy_type"`
+	ProxyHost          string `json:"proxy_host"`
+	ProxyPort          int    `json:"proxy_port"`
+	ProxyUsername      string `json:"proxy_username"`
+	ProxyPassword      string `json:"proxy_password"`
+	ClearProxyPassword bool   `json:"clear_proxy_password"`
+	TargetURL          string `json:"target_url"`
+}
+
+func (s *Server) handleTestUpstreamProxy(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	var req testProxyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+
+	pPass := req.ProxyPassword
+	if req.ClearProxyPassword {
+		pPass = ""
+	} else if pPass == "" && strings.TrimSpace(req.UpstreamID) != "" {
+		existing, err := s.store.GetUpstreamByID(r.Context(), strings.TrimSpace(req.UpstreamID))
+		if err == nil && existing.ProxyPasswordEncrypted != "" {
+			if dec, dErr := s.cipher.DecryptString(existing.ProxyPasswordEncrypted); dErr == nil {
+				pPass = dec
+			}
+		}
+	}
+
+	pCfg := proxy.Config{
+		Enabled:  true,
+		Type:     strings.TrimSpace(req.ProxyType),
+		Host:     strings.TrimSpace(req.ProxyHost),
+		Port:     req.ProxyPort,
+		Username: strings.TrimSpace(req.ProxyUsername),
+		Password: pPass,
+	}
+	if err := pCfg.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_proxy", err.Error())
+		return
+	}
+
+	targetURL := strings.TrimSpace(req.TargetURL)
+	if targetURL == "" {
+		if strings.EqualFold(strings.TrimSpace(req.UpstreamType), "s3") {
+			targetURL = "https://s3.amazonaws.com"
+		} else {
+			targetURL = "https://api.dropboxapi.com"
+		}
+	}
+
+	tCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	httpStatus, latencyMs, err := proxy.TestConnectivity(tCtx, pCfg, targetURL)
+	status := "ok"
+	errMsg := ""
+	if err != nil {
+		status = "failed"
+		errMsg = err.Error()
+	}
+
+	s.auditLog.Record(r.Context(), audit.Event{
+		ActorType:    "admin",
+		ActorID:      admin.ID,
+		ActorName:    admin.Username,
+		Action:       "upstream.test_proxy",
+		ResourceType: "upstream",
+		ResourceID:   strings.TrimSpace(req.UpstreamID),
+		Status:       map[bool]string{true: "success", false: "failure"}[err == nil],
+		IPAddress:    clientIP(r),
+		UserAgent:    r.UserAgent(),
+		RequestID:    middleware.GetReqID(r.Context()),
+		Detail: map[string]any{
+			"proxy_type":  pCfg.Type,
+			"proxy_host":  pCfg.Host,
+			"proxy_port":  pCfg.Port,
+			"target_url":  targetURL,
+			"http_status": httpStatus,
+			"latency_ms":  latencyMs,
+			"error":       errMsg,
+		},
+	})
+
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     status,
+			"target_url": targetURL,
+			"latency_ms": latencyMs,
+			"error":      errMsg,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      status,
+		"target_url":  targetURL,
+		"http_status": httpStatus,
+		"latency_ms":  latencyMs,
+	})
+}
+
 // --- Dropbox Web OAuth2 Flow ---
 
 func (s *Server) resolveDropboxRedirectURI(r *http.Request) string {

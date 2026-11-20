@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Copy, Link2, Plus, Trash2, Wifi } from 'lucide-react'
+import { CheckCircle2, Copy, Link2, Loader2, Plus, Trash2, Wifi, XCircle } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
 import { api } from '../api'
@@ -72,6 +72,9 @@ export const UpstreamsPage: React.FC = () => {
   const [saving, setSaving] = useState(false)
   const [modalErr, setModalErr] = useState('')
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [testingProxy, setTestingProxy] = useState(false)
+  const [proxyTargetURL, setProxyTargetURL] = useState('')
+  const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; text: string } | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -126,7 +129,51 @@ export const UpstreamsPage: React.FC = () => {
     }
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
+    setProxyTestResult(null)
+    setProxyTargetURL('')
     setModalOpen(true)
+  }
+
+  const defaultProxyTestURL = () => {
+    if (form.type === 'dropbox') return 'https://api.dropboxapi.com'
+    const ep = form.endpoint.trim()
+    if (!ep) return 'https://s3.amazonaws.com'
+    return /^https?:\/\//i.test(ep) ? ep : `https://${ep}`
+  }
+
+  const handleTestProxy = async () => {
+    if (!form.proxy_enabled || testingProxy) return
+    setProxyTestResult(null)
+    setTestingProxy(true)
+    const targetURL = proxyTargetURL.trim() || defaultProxyTestURL()
+    try {
+      const res = await api.testUpstreamProxy({
+        upstream_id: form.id,
+        upstream_type: form.type,
+        proxy_type: form.proxy_type,
+        proxy_host: form.proxy_host,
+        proxy_port: Number(form.proxy_port),
+        proxy_username: form.proxy_username,
+        proxy_password: form.proxy_password,
+        clear_proxy_password: form.clear_proxy_password,
+        target_url: targetURL,
+      })
+      if (res.status === 'ok') {
+        const msg = `代理连接成功（HTTP ${res.http_status} · 延迟 ${res.latency_ms ?? 0} ms · 目标 ${res.target_url}）`
+        setProxyTestResult({ ok: true, text: msg })
+        toast.success('代理连通性测试通过！')
+      } else {
+        const msg = `代理测试失败：${res.error || '未知错误'}`
+        setProxyTestResult({ ok: false, text: msg })
+        toast.error(msg)
+      }
+    } catch (err: any) {
+      const msg = `代理测试失败：${err.message || '请求失败'}`
+      setProxyTestResult({ ok: false, text: msg })
+      toast.error(msg)
+    } finally {
+      setTestingProxy(false)
+    }
   }
 
   const closeModal = () => {
@@ -243,6 +290,8 @@ export const UpstreamsPage: React.FC = () => {
             const next = emptyForm()
             setForm(next)
             setInitialFormSnap(JSON.stringify(next))
+            setProxyTestResult(null)
+            setProxyTargetURL('')
             setModalOpen(true)
           }}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
@@ -259,6 +308,8 @@ export const UpstreamsPage: React.FC = () => {
             const next = emptyForm()
             setForm(next)
             setInitialFormSnap(JSON.stringify(next))
+            setProxyTestResult(null)
+            setProxyTargetURL('')
             setModalErr('')
             setModalOpen(true)
           }}><Plus className="w-4 h-4" />添加上游存储</button>} /></div>}
@@ -602,6 +653,47 @@ export const UpstreamsPage: React.FC = () => {
                           <input type="checkbox" checked={form.clear_proxy_password} onChange={(e) => setForm({ ...form, clear_proxy_password: e.target.checked, proxy_password: '' })} />
                           <span>清除已有代理密码</span>
                         </label>
+                      )}
+                    </div>
+                    <div className="col-span-3 pt-2 border-t border-slate-100 space-y-2">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="flex-1 min-w-[200px]">
+                          <label htmlFor="upstreams-field-proxy-target" className="block text-xs text-slate-600 mb-1">
+                            代理测试目标 URL（可选，默认 {defaultProxyTestURL()}）
+                          </label>
+                          <input
+                            id="upstreams-field-proxy-target"
+                            value={proxyTargetURL}
+                            onChange={(e) => setProxyTargetURL(e.target.value)}
+                            placeholder={defaultProxyTestURL()}
+                            className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleTestProxy}
+                          disabled={testingProxy || !form.proxy_host.trim() || !form.proxy_port}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-45 disabled:cursor-not-allowed text-indigo-700 rounded-lg text-xs font-medium shrink-0"
+                        >
+                          {testingProxy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
+                          <span>{testingProxy ? '测试中...' : '测试代理'}</span>
+                        </button>
+                      </div>
+                      {proxyTestResult && (
+                        <div
+                          className={`p-2.5 rounded-lg border text-xs flex items-start gap-2 ${
+                            proxyTestResult.ok
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                              : 'bg-rose-50 border-rose-200 text-rose-800'
+                          }`}
+                        >
+                          {proxyTestResult.ok ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                          )}
+                          <span className="break-all">{proxyTestResult.text}</span>
+                        </div>
                       )}
                     </div>
                   </div>

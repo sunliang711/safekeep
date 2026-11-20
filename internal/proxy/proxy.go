@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -101,4 +102,44 @@ func NewHTTPClient(cfg Config) (*http.Client, error) {
 	}
 
 	return &http.Client{Transport: tr}, nil
+}
+
+// TestConnectivity verifies that an outbound HTTP/HTTPS/SOCKS5 proxy can dial and forward a
+// lightweight HEAD request to targetURL within ctx's deadline.
+func TestConnectivity(ctx context.Context, cfg Config, targetURL string) (statusCode int, latencyMs int64, err error) {
+	cfg.Enabled = true
+	targetURL = strings.TrimSpace(targetURL)
+	if targetURL == "" {
+		targetURL = "https://api.dropboxapi.com"
+	}
+	u, parseErr := url.Parse(targetURL)
+	if parseErr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return 0, 0, fmt.Errorf("invalid target_url %q (must start with http:// or https://)", targetURL)
+	}
+
+	client, err := NewHTTPClient(cfg)
+	if err != nil {
+		return 0, 0, err
+	}
+	// Avoid following redirects blindly; receiving the initial HTTP response already proves proxy connectivity.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, targetURL, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	start := time.Now()
+	resp, err := client.Do(req)
+	latencyMs = time.Since(start).Milliseconds()
+	if err != nil {
+		return 0, latencyMs, err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusProxyAuthRequired {
+		return resp.StatusCode, latencyMs, fmt.Errorf("proxy authentication failed (HTTP 407 Proxy Authentication Required)")
+	}
+	return resp.StatusCode, latencyMs, nil
 }

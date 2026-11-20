@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -504,6 +505,66 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	expectedRedirect := env.srv.URL + "/admin/api/v1/oauth/dropbox/callback"
 	if oauthStartResp.StatusCode != http.StatusOK || oauthOut.RedirectURI != expectedRedirect {
 		t.Fatalf("expected redirect_uri %q, got status=%d redirect_uri=%q", expectedRedirect, oauthStartResp.StatusCode, oauthOut.RedirectURI)
+	}
+
+	// 13b. Upstream proxy connectivity test endpoint (/admin/api/v1/upstreams/test-proxy)
+	proxyTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer proxyTarget.Close()
+	mockProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Proxy-Authorization") == "" {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		fwdReq, _ := http.NewRequestWithContext(r.Context(), r.Method, r.RequestURI, nil)
+		resp, err := http.DefaultClient.Do(fwdReq)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+	}))
+	defer mockProxy.Close()
+	mpURL, _ := url.Parse(mockProxy.URL)
+	mpHost, mpPortStr, _ := net.SplitHostPort(mpURL.Host)
+	mpPort, _ := strconv.Atoi(mpPortStr)
+
+	proxyTestResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/upstreams/test-proxy", map[string]any{
+		"proxy_type":     "http",
+		"proxy_host":     mpHost,
+		"proxy_port":     mpPort,
+		"proxy_username": "u",
+		"proxy_password": "p",
+		"target_url":     proxyTarget.URL,
+	})
+	var proxyTestOut struct {
+		Status     string `json:"status"`
+		HTTPStatus int    `json:"http_status"`
+	}
+	if err := json.NewDecoder(proxyTestResp.Body).Decode(&proxyTestOut); err != nil {
+		t.Fatal(err)
+	}
+	proxyTestResp.Body.Close()
+	if proxyTestResp.StatusCode != http.StatusOK || proxyTestOut.Status != "ok" || proxyTestOut.HTTPStatus != http.StatusNoContent {
+		t.Fatalf("expected proxy test ok with 204, got code=%d out=%+v", proxyTestResp.StatusCode, proxyTestOut)
+	}
+
+	proxyFailResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/upstreams/test-proxy", map[string]any{
+		"proxy_type": "http",
+		"proxy_host": mpHost,
+		"proxy_port": mpPort,
+		"target_url": proxyTarget.URL,
+	})
+	var proxyFailOut struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	_ = json.NewDecoder(proxyFailResp.Body).Decode(&proxyFailOut)
+	proxyFailResp.Body.Close()
+	if proxyFailResp.StatusCode != http.StatusOK || proxyFailOut.Status != "failed" || proxyFailOut.Error == "" {
+		t.Fatalf("expected proxy test auth failure, got code=%d out=%+v", proxyFailResp.StatusCode, proxyFailOut)
 	}
 
 	// 14. SMTP alerts, oversize file rejection (>max_file_size_bytes), and daily circuit breaker (>daily_traffic_limit_bytes)

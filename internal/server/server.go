@@ -141,6 +141,7 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/upstreams", s.handleListUpstreams)
 			r.Post("/upstreams", s.handleCreateUpstream)
+			r.Post("/upstreams/test-proxy", s.handleTestUpstreamProxy)
 			r.Put("/upstreams/{id}", s.handleUpdateUpstream)
 			r.Delete("/upstreams/{id}", s.handleDeleteUpstream)
 			r.Post("/upstreams/{id}/test", s.handleTestUpstream)
