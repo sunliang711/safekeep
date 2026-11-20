@@ -29,9 +29,9 @@ SafeKeep 是一个使用 **Go** 开发的单二进制多云文件备份 HTTP 网
 - `SAFEKEEP_CORS_ORIGINS`：额外允许的跨域 Origin（逗号分隔）
 - `SAFEKEEP_PUBLIC_BASE_URL`：对外回调地址（默认 `http://localhost:8333`）
 - `SAFEKEEP_SPOOL_DIR`：临时缓冲目录（默认 `./data/spool`）
-- `SAFEKEEP_MAX_FILE_SIZE_BYTES`（默认 `104857600` = 100 MiB）/ `SAFEKEEP_DAILY_TRAFFIC_LIMIT_BYTES`（默认 `1073741824` = 1 GiB）/ `SAFEKEEP_MAX_SPOOL_BYTES`
-- `SAFEKEEP_WORKER_CONCURRENCY` / `SAFEKEEP_SYNC_TIMEOUT_SEC` / `SAFEKEEP_MAX_RETRY_ATTEMPTS`
 - `SAFEKEEP_SMTP_ENABLED` / `SAFEKEEP_SMTP_HOST` / `SAFEKEEP_SMTP_PORT` / `SAFEKEEP_SMTP_TLS_MODE` / `SAFEKEEP_SMTP_USERNAME` / `SAFEKEEP_SMTP_PASSWORD` / `SAFEKEEP_SMTP_FROM_EMAIL` / `SAFEKEEP_SMTP_TO_EMAILS`
+
+> 上传限额（默认 `100 MiB`）、每日流量熔断（默认 `1 GiB`）、缓冲总容量上限以及任务调度参数（Worker 并发数、同步超时、最大重试次数）统一存储在 SQLite 数据库中，可在 Web 管理端 **「系统设置 → 全局运行参数」** 页面实时配置。
 
 ## 快速运行
 

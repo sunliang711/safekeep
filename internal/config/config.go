@@ -40,14 +40,8 @@ type FileConfig struct {
 		CORSAllowedOrigins []string `toml:"cors_allowed_origins"`
 	} `toml:"server"`
 	Defaults struct {
-		PublicBaseURL          string `toml:"public_base_url"`
-		SpoolDir               string `toml:"spool_dir"`
-		MaxFileSizeBytes       int64  `toml:"max_file_size_bytes"`
-		DailyTrafficLimitBytes int64  `toml:"daily_traffic_limit_bytes"`
-		MaxSpoolBytes          int64  `toml:"max_spool_bytes"`
-		WorkerConcurrency      int    `toml:"worker_concurrency"`
-		SyncTimeoutSec         int    `toml:"sync_timeout_sec"`
-		MaxRetryAttempts       int    `toml:"max_retry_attempts"`
+		PublicBaseURL string `toml:"public_base_url"`
+		SpoolDir      string `toml:"spool_dir"`
 	} `toml:"defaults"`
 	SMTP notify.SMTPConfig `toml:"smtp"`
 }
@@ -151,30 +145,13 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 	}
 
 	// 4. Build initial SystemSettings defaults from config.toml + env
+	// Note: upload limits, circuit breaker, and task scheduling params are managed solely in SQLite / Web UI.
 	defaults := DefaultSystemSettings(boot.DataDir)
 	if strings.TrimSpace(fc.Defaults.PublicBaseURL) != "" {
 		defaults.PublicBaseURL = strings.TrimSpace(fc.Defaults.PublicBaseURL)
 	}
 	if strings.TrimSpace(fc.Defaults.SpoolDir) != "" {
 		defaults.SpoolDir = strings.TrimSpace(fc.Defaults.SpoolDir)
-	}
-	if fc.Defaults.MaxFileSizeBytes > 0 {
-		defaults.MaxFileSizeBytes = fc.Defaults.MaxFileSizeBytes
-	}
-	if fc.Defaults.DailyTrafficLimitBytes > 0 {
-		defaults.DailyTrafficLimitBytes = fc.Defaults.DailyTrafficLimitBytes
-	}
-	if fc.Defaults.MaxSpoolBytes > 0 {
-		defaults.MaxSpoolBytes = fc.Defaults.MaxSpoolBytes
-	}
-	if fc.Defaults.WorkerConcurrency > 0 {
-		defaults.WorkerConcurrency = fc.Defaults.WorkerConcurrency
-	}
-	if fc.Defaults.SyncTimeoutSec > 0 {
-		defaults.SyncTimeoutSec = fc.Defaults.SyncTimeoutSec
-	}
-	if fc.Defaults.MaxRetryAttempts > 0 {
-		defaults.MaxRetryAttempts = fc.Defaults.MaxRetryAttempts
 	}
 
 	defaults, _ = ApplyEnvOverrides(defaults)
@@ -196,8 +173,9 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 	return boot, nil
 }
 
-// ApplyEnvOverrides applies explicit SAFEKEEP_* environment variables onto SystemSettings
-// and reports whether any runtime override variable was set.
+// ApplyEnvOverrides applies explicit deployment SAFEKEEP_* environment variables onto SystemSettings
+// (public_base_url and spool_dir) and reports whether any override variable was set.
+// Upload limits, circuit breaker, and task scheduling parameters are configured exclusively in the database / Web UI.
 func ApplyEnvOverrides(s SystemSettings) (SystemSettings, bool) {
 	changed := false
 	if v, ok := os.LookupEnv("SAFEKEEP_PUBLIC_BASE_URL"); ok && strings.TrimSpace(v) != "" {
@@ -207,42 +185,6 @@ func ApplyEnvOverrides(s SystemSettings) (SystemSettings, bool) {
 	if v, ok := os.LookupEnv("SAFEKEEP_SPOOL_DIR"); ok && strings.TrimSpace(v) != "" {
 		s.SpoolDir = strings.TrimSpace(v)
 		changed = true
-	}
-	if v, ok := os.LookupEnv("SAFEKEEP_MAX_FILE_SIZE_BYTES"); ok {
-		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n > 0 {
-			s.MaxFileSizeBytes = n
-			changed = true
-		}
-	}
-	if v, ok := os.LookupEnv("SAFEKEEP_DAILY_TRAFFIC_LIMIT_BYTES"); ok {
-		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n >= 0 {
-			s.DailyTrafficLimitBytes = n
-			changed = true
-		}
-	}
-	if v, ok := os.LookupEnv("SAFEKEEP_MAX_SPOOL_BYTES"); ok {
-		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n >= 0 {
-			s.MaxSpoolBytes = n
-			changed = true
-		}
-	}
-	if v, ok := os.LookupEnv("SAFEKEEP_WORKER_CONCURRENCY"); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
-			s.WorkerConcurrency = n
-			changed = true
-		}
-	}
-	if v, ok := os.LookupEnv("SAFEKEEP_SYNC_TIMEOUT_SEC"); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
-			s.SyncTimeoutSec = n
-			changed = true
-		}
-	}
-	if v, ok := os.LookupEnv("SAFEKEEP_MAX_RETRY_ATTEMPTS"); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
-			s.MaxRetryAttempts = n
-			changed = true
-		}
 	}
 	return s, changed
 }

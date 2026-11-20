@@ -56,19 +56,8 @@ job "safekeep" {
         # 可选：额外允许跨域的 Origin 白名单（多个用英文逗号分隔）
         # SAFEKEEP_CORS_ORIGINS  = "http://192.168.1.10:8333"
 
-        # --- 上传限额、熔断与任务调度参数 ---
-        # 单文件最大大小（字节）：104857600 = 100 MiB，超限拒绝并发告警邮件
-        SAFEKEEP_MAX_FILE_SIZE_BYTES       = "104857600"
-        # 每日累计发送熔断阈值（字节）：1073741824 = 1 GiB，设为 "0" 表示不熔断
-        SAFEKEEP_DAILY_TRAFFIC_LIMIT_BYTES = "1073741824"
-        # 本地临时缓冲目录总容量上限（字节）：10737418240 = 10 GiB，设为 "0" 表示不限
-        SAFEKEEP_MAX_SPOOL_BYTES           = "10737418240"
-        # 后台异步上传 Worker 并发数
-        SAFEKEEP_WORKER_CONCURRENCY        = "4"
-        # 同步上传超时时间（秒），超时后自动转后台异步继续并返回 202
-        SAFEKEEP_SYNC_TIMEOUT_SEC          = "60"
-        # 异步上传失败最大重试次数
-        SAFEKEEP_MAX_RETRY_ATTEMPTS        = "3"
+        # 注：上传限额（默认 100 MiB）、每日流量熔断（默认 1 GiB）、缓冲总容量上限与任务调度参数
+        #（Worker 并发数、同步超时、最大重试次数）统一持久化在 SQLite 数据库，请在 Web 管理端「系统设置 -> 全局运行参数」中配置。
 
         # --- 可选：SMTP 邮件告警（也可直接在 Web 管理端「系统设置 -> SMTP 邮件告警」配置）---
         # SAFEKEEP_SMTP_ENABLED    = "true"
