@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -27,13 +28,22 @@ import (
 	"safekeep/web"
 )
 
+var version = "dev"
+
 func main() {
 	var configFlag, listenFlag, dataDirFlag, masterKeyFlag string
+	var showVersion bool
 	flag.StringVar(&configFlag, "config", "", "Path to config.toml (or set SAFEKEEP_CONFIG)")
 	flag.StringVar(&listenFlag, "listen", config.DefaultListenAddr, "HTTP listen address (overrides SAFEKEEP_LISTEN and config.toml)")
 	flag.StringVar(&dataDirFlag, "data-dir", "./data", "Data directory for SQLite, master key, and spool")
 	flag.StringVar(&masterKeyFlag, "master-key", "", "Optional 32-byte master key (64 hex chars or base64)")
+	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	cliOverrides := map[string]string{}
 	flag.Visit(func(f *flag.Flag) {
@@ -129,7 +139,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("SafeKeep HTTP server listening", "addr", boot.ListenAddr, "data_dir", boot.DataDir, "config", boot.ConfigPath)
+		logger.Info("SafeKeep HTTP server listening", "version", version, "addr", boot.ListenAddr, "data_dir", boot.DataDir, "config", boot.ConfigPath)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server error", "err", err)
 			os.Exit(1)

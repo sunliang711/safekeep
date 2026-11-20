@@ -15,7 +15,8 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY web/embed.go ./web/embed.go
 COPY --from=web-builder /src/web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/safekeep ./cmd/safekeep
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/safekeep ./cmd/safekeep
 
 # Stage 3: Minimal runtime image
 FROM alpine:3.21
