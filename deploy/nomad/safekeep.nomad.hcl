@@ -10,6 +10,16 @@ job "safekeep" {
   group "server" {
     count = 1
 
+    # 多节点 Nomad 集群建议解除下方注释并锁定运行节点，避免重新调度漂移到其他节点找不到本地 SQLite 数据：
+    # constraint {
+    #   attribute = "${attr.unique.hostname}"
+    #   value     = "your-node-hostname"
+    # }
+
+    update {
+      max_parallel = 1
+    }
+
     network {
       port "http" {
         static = 8333
@@ -37,6 +47,12 @@ job "safekeep" {
         interval = "10s"
         timeout  = "3s"
       }
+    }
+
+    volume "safekeep" {
+      type      = "host"
+      source    = "safekeep"
+      read_only = false
     }
 
     task "safekeep" {
@@ -71,13 +87,15 @@ job "safekeep" {
         # SAFEKEEP_SMTP_TO_EMAILS  = "ops@example.com,admin@example.com"
       }
 
+      volume_mount {
+        volume      = "safekeep"
+        destination = "/data"
+        read_only   = false
+      }
+
       config {
         image = var.image
         ports = ["http"]
-        # 生产环境建议挂载宿主机目录持久化 SQLite、master.key 与缓冲盘：
-        # volumes = [
-        #   "/opt/safekeep/data:/data",
-        # ]
       }
 
       resources {
