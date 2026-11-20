@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, Eye, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
 import { SecretField } from '../components/SecretField'
@@ -34,7 +34,9 @@ export const ClientsPage: React.FC = () => {
   const [form, setForm] = useState<ClientForm | null>(null)
   const [initialFormSnap, setInitialFormSnap] = useState('')
   const [saving, setSaving] = useState(false)
-  const [revealedKey, setRevealedKey] = useState<string | null>(null)
+  const [revealedKey, setRevealedKey] = useState<{ key: string; clientName: string; isNew?: boolean } | null>(null)
+  const [revealingKeyId, setRevealingKeyId] = useState<string | null>(null)
+  const [editingHasAPIKey, setEditingHasAPIKey] = useState(false)
   const [editingHasWebhookSecret, setEditingHasWebhookSecret] = useState(false)
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideTab, setGuideTab] = useState<'sync-upload' | 'async-upload' | 'raw-stream' | 'query-download'>('sync-upload')
@@ -81,6 +83,7 @@ export const ClientsPage: React.FC = () => {
     }
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
+    setEditingHasAPIKey(false)
     setEditingHasWebhookSecret(false)
     setModalOpen(true)
   }
@@ -113,6 +116,7 @@ export const ClientsPage: React.FC = () => {
     }
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
+    setEditingHasAPIKey(Boolean(c.has_api_key))
     setEditingHasWebhookSecret(Boolean(c.has_webhook_secret))
     setModalOpen(true)
   }
@@ -161,7 +165,7 @@ export const ClientsPage: React.FC = () => {
         toast.success(`客户 "${form.name}" 配置已保存`)
       } else {
         const res = await api.createClient(payload)
-        setRevealedKey(res.api_key)
+        setRevealedKey({ key: res.api_key, clientName: form.name, isNew: true })
         toast.success(`客户 "${form.name}" 已创建`)
       }
       setModalOpen(false)
@@ -173,11 +177,32 @@ export const ClientsPage: React.FC = () => {
     }
   }
 
+  const handleRevealKey = async (c: Client) => {
+    if (revealingKeyId) return
+    if (c.has_api_key === false) {
+      toast.info(`客户 "${c.name}" 创建于旧版本，未保存可解密的 API Key，请点击「轮换 Key」生成新 Key 后即可反复查看。`)
+      return
+    }
+    setRevealingKeyId(c.id)
+    try {
+      const res = await api.revealClientSecrets(c.id)
+      if (!res.api_key) {
+        toast.info(`客户 "${c.name}" 当前无可查看的 API Key，请点击「轮换 Key」重新生成。`)
+        return
+      }
+      setRevealedKey({ key: res.api_key, clientName: c.name })
+    } catch (err: any) {
+      toast.error(err.message || '获取 API Key 失败')
+    } finally {
+      setRevealingKeyId(null)
+    }
+  }
+
   const handleRotate = async (c: Client) => {
     if (!confirm(`确定轮换客户 "${c.name}" 的 API Key 吗？旧 Key 将立即失效。`)) return
     try {
       const res = await api.rotateClientKey(c.id)
-      setRevealedKey(res.api_key)
+      setRevealedKey({ key: res.api_key, clientName: c.name, isNew: true })
       toast.success(`已为 "${c.name}" 生成新 API Key`)
       await load()
     } catch (err: any) {
@@ -397,13 +422,21 @@ export const ClientsPage: React.FC = () => {
                     <div className="text-[11px] text-slate-400 mt-1">{formatTime(c.last_used_at)}</div>
                   </td>
                   <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
-                    <button onClick={() => openEdit(c)} className="text-xs text-indigo-600 hover:underline">
+                    <button
+                      type="button"
+                      disabled={revealingKeyId === c.id}
+                      onClick={() => handleRevealKey(c)}
+                      className="text-xs text-slate-700 hover:text-indigo-600 hover:underline inline-flex items-center gap-0.5 disabled:opacity-50"
+                    >
+                      <Eye className="w-3 h-3" /> {revealingKeyId === c.id ? '读取中…' : '查看 Key'}
+                    </button>
+                    <button type="button" onClick={() => openEdit(c)} className="text-xs text-indigo-600 hover:underline">
                       编辑
                     </button>
-                    <button onClick={() => handleRotate(c)} className="text-xs text-amber-600 hover:underline inline-flex items-center gap-0.5">
+                    <button type="button" onClick={() => handleRotate(c)} className="text-xs text-amber-600 hover:underline inline-flex items-center gap-0.5">
                       <RefreshCw className="w-3 h-3" /> 轮换 Key
                     </button>
-                    <button aria-label={`删除客户 ${c.name}`} onClick={() => handleDelete(c)} className="text-xs text-rose-600 hover:underline inline-flex items-center">
+                    <button type="button" aria-label={`删除客户 ${c.name}`} onClick={() => handleDelete(c)} className="text-xs text-rose-600 hover:underline inline-flex items-center">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
@@ -477,6 +510,27 @@ export const ClientsPage: React.FC = () => {
                   <label htmlFor="clients-field-10" className="block text-xs text-slate-600 mb-1">API Key 过期时间（可选）</label>
                   <input id="clients-field-10" type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
+                {form.id && (
+                  <div className="col-span-2">
+                    <label htmlFor="clients-field-api-key" className="block text-xs text-slate-600 mb-1">
+                      API Key（默认掩码 *****，点右侧可查看或复制；如需更换请使用列表中的「轮换 Key」）
+                    </label>
+                    {editingHasAPIKey ? (
+                      <SecretField
+                        id="clients-field-api-key"
+                        readOnly
+                        hasSaved
+                        value=""
+                        onChange={() => {}}
+                        onReveal={async () => (await api.revealClientSecrets(form.id!)).api_key || ''}
+                      />
+                    ) : (
+                      <div className="px-3 py-1.5 rounded-lg border bg-slate-50 text-xs text-slate-500">
+                        该客户创建于旧版本，未保存可解密的 API Key 副本；请在列表点击「轮换 Key」生成新 Key。
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <label className="inline-flex items-center gap-2">
@@ -559,33 +613,37 @@ export const ClientsPage: React.FC = () => {
       )}
 
       {revealedKey && (
-        <Modal title="保存 API Key" onClose={() => setRevealedKey(null)} dismissible={false}>
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4">
-            <div className="flex items-center gap-2 text-amber-700 font-semibold">
+        <Modal title="查看 API Key" onClose={() => setRevealedKey(null)} size="md">
+          <div className="bg-white rounded-2xl w-full p-6 space-y-4">
+            <div className="flex items-center gap-2 text-indigo-700 font-semibold">
               <KeyRound className="w-5 h-5" />
-              <span>请立即复制并妥善保存此 API Key</span>
+              <span>{revealedKey.isNew ? `已生成客户 "${revealedKey.clientName}" 的 API Key` : `客户 "${revealedKey.clientName}" 的 API Key`}</span>
             </div>
-            <p className="text-xs text-slate-500">出于安全原因，服务端仅保存其 SHA-256 哈希，关闭窗口后将无法再次查看完整明文。</p>
+            <p className="text-xs text-slate-500">
+              API Key 已使用服务端主密钥加密存储，之后可在客户列表点击「查看 Key」或在编辑客户页面中随时查看、复制。
+            </p>
             <div className="flex items-center gap-2 bg-slate-900 text-emerald-400 p-3 rounded-lg font-mono text-xs break-all">
-              <span className="flex-1 min-w-0 select-all">{revealedKey}</span>
+              <span className="flex-1 min-w-0 select-all">{revealedKey.key}</span>
               <button
+                type="button"
                 onClick={async () => {
                   try {
-                    await copyText(revealedKey)
+                    await copyText(revealedKey.key)
                     toast.success('已复制 API Key')
                   } catch (e: any) {
                     toast.error(e.message || '复制失败')
                   }
                 }}
-                className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded text-white"
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded text-white shrink-0"
                 title="复制"
+                aria-label="复制 API Key"
               >
                 <Copy className="w-4 h-4" />
               </button>
             </div>
             <div className="flex justify-end">
-              <button onClick={() => setRevealedKey(null)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">
-                我已保存
+              <button type="button" onClick={() => setRevealedKey(null)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm">
+                关闭
               </button>
             </div>
           </div>

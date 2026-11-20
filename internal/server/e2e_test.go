@@ -628,8 +628,16 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	var clRevealOut map[string]string
 	_ = json.NewDecoder(clRevealResp.Body).Decode(&clRevealOut)
 	clRevealResp.Body.Close()
-	if clRevealResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected client secret reveal 200, got %d", clRevealResp.StatusCode)
+	if clRevealResp.StatusCode != http.StatusOK || clRevealOut["api_key"] != clOut.APIKey {
+		t.Fatalf("expected client secret reveal 200 with api_key %q, got code=%d out=%+v", clOut.APIKey, clRevealResp.StatusCode, clRevealOut)
+	}
+	// Repeat reveal must continue to work, and rotation must update revealed api_key
+	clRevealResp2 := env.adminReq(t, http.MethodGet, "/admin/api/v1/clients/"+clOut.Client.ID+"/secrets", nil)
+	var clRevealOut2 map[string]string
+	_ = json.NewDecoder(clRevealResp2.Body).Decode(&clRevealOut2)
+	clRevealResp2.Body.Close()
+	if clRevealResp2.StatusCode != http.StatusOK || clRevealOut2["api_key"] != clOut.APIKey {
+		t.Fatalf("expected repeatable client secret reveal 200 with api_key %q, got code=%d out=%+v", clOut.APIKey, clRevealResp2.StatusCode, clRevealOut2)
 	}
 
 	// 14. SMTP alerts, oversize file rejection (>max_file_size_bytes), and daily circuit breaker (>daily_traffic_limit_bytes)

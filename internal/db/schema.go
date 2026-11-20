@@ -112,6 +112,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			description TEXT NOT NULL DEFAULT '',
 			key_prefix TEXT NOT NULL,
 			key_hash TEXT NOT NULL UNIQUE,
+			key_encrypted TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
 			default_mode TEXT NOT NULL DEFAULT 'async',
 			path_prefix TEXT NOT NULL DEFAULT '',
@@ -241,6 +242,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("exec migration: %w", err)
 		}
+	}
+	if err := s.ensureColumn(ctx, "clients", "key_encrypted", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensure clients.key_encrypted: %w", err)
 	}
 	if err := s.ensureColumn(ctx, "backup_tasks", "remote_filename", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensure backup_tasks.remote_filename: %w", err)

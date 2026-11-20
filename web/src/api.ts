@@ -102,7 +102,7 @@ export const api = {
   rotateClientKey: (id: string) =>
     req<{ api_key: string; key_prefix: string }>(`/admin/api/v1/clients/${id}/rotate-key`, { method: 'POST' }),
   revealClientSecrets: (id: string) =>
-    req<{ webhook_secret?: string }>(`/admin/api/v1/clients/${id}/secrets`),
+    req<{ api_key?: string; webhook_secret?: string }>(`/admin/api/v1/clients/${id}/secrets`),
 
   listTasks: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString()

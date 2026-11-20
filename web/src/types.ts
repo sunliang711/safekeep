@@ -41,6 +41,7 @@ export interface Client {
   name: string;
   description: string;
   key_prefix: string;
+  has_api_key?: boolean;
   enabled: boolean;
   default_mode: 'sync' | 'async';
   path_prefix: string;

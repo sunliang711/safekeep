@@ -91,6 +91,7 @@ type ClientRecord struct {
 	Description          string     `json:"description"`
 	KeyPrefix            string     `json:"key_prefix"`
 	KeyHash              string     `json:"key_hash"`
+	APIKeyPlain          string     `json:"api_key_plain,omitempty"`
 	Enabled              bool       `json:"enabled"`
 	DefaultMode          string     `json:"default_mode"`
 	PathPrefix           string     `json:"path_prefix"`
@@ -232,12 +233,17 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 		if err != nil {
 			return nil, fmt.Errorf("decrypt client %s webhook secret: %w", c.Name, err)
 		}
+		apiKeyPlain, err := s.cipher.DecryptString(c.KeyEncrypted)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt client %s api key: %w", c.Name, err)
+		}
 		data.Clients = append(data.Clients, ClientRecord{
 			ID:                   c.ID,
 			Name:                 c.Name,
 			Description:          c.Description,
 			KeyPrefix:            c.KeyPrefix,
 			KeyHash:              c.KeyHash,
+			APIKeyPlain:          apiKeyPlain,
 			Enabled:              c.Enabled,
 			DefaultMode:          c.DefaultMode,
 			PathPrefix:           c.PathPrefix,
@@ -581,9 +587,13 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		counts.Upstreams++
 	}
 
-	// 3. Clients (re-encrypt webhook secret, keep key_hash intact, update in-place on conflict to prevent CASCADE delete of tasks)
+	// 3. Clients (re-encrypt webhook secret and API key, keep key_hash intact, update in-place on conflict to prevent CASCADE delete of tasks)
 	for _, c := range b.Data.Clients {
 		whEnc, err := s.cipher.EncryptString(c.WebhookSecretPlain)
+		if err != nil {
+			return nil, err
+		}
+		keyEnc, err := s.cipher.EncryptString(c.APIKeyPlain)
 		if err != nil {
 			return nil, err
 		}
@@ -621,18 +631,18 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO clients(
-				id, name, description, key_prefix, key_hash, enabled, default_mode,
+				id, name, description, key_prefix, key_hash, key_encrypted, enabled, default_mode,
 				path_prefix, max_file_size_bytes, allowed_mime_types_json, rate_limit_rpm,
 				webhook_url, webhook_secret_encrypted, expires_at, last_used_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name, description=excluded.description, key_prefix=excluded.key_prefix,
-				key_hash=excluded.key_hash, enabled=excluded.enabled, default_mode=excluded.default_mode,
+				key_hash=excluded.key_hash, key_encrypted=excluded.key_encrypted, enabled=excluded.enabled, default_mode=excluded.default_mode,
 				path_prefix=excluded.path_prefix, max_file_size_bytes=excluded.max_file_size_bytes,
 				allowed_mime_types_json=excluded.allowed_mime_types_json, rate_limit_rpm=excluded.rate_limit_rpm,
 				webhook_url=excluded.webhook_url, webhook_secret_encrypted=excluded.webhook_secret_encrypted,
 				expires_at=excluded.expires_at, updated_at=excluded.updated_at`,
-			targetID, c.Name, c.Description, c.KeyPrefix, c.KeyHash, boolInt(c.Enabled), c.DefaultMode,
+			targetID, c.Name, c.Description, c.KeyPrefix, c.KeyHash, keyEnc, boolInt(c.Enabled), c.DefaultMode,
 			c.PathPrefix, c.MaxFileSizeBytes, c.AllowedMimeTypesJSON, c.RateLimitRPM,
 			c.WebhookURL, whEnc, c.ExpiresAt, c.LastUsedAt, c.CreatedAt, c.UpdatedAt,
 		); err != nil {

@@ -43,12 +43,14 @@ func TestExportInspectImportReencryptsSecrets(t *testing.T) {
 	}
 
 	plainKey, prefix, hash, _ := crypto.GenerateAPIKey()
+	keyEncA, _ := cipherA.EncryptString(plainKey)
 	whEncA, _ := cipherA.EncryptString("wh-secret")
 	cl := &db.Client{
 		ID:                     "cl_1",
 		Name:                   "acme",
 		KeyPrefix:              prefix,
 		KeyHash:                hash,
+		KeyEncrypted:           keyEncA,
 		Enabled:                true,
 		DefaultMode:            "sync",
 		PathPrefix:             "acme",
@@ -139,10 +141,14 @@ func TestExportInspectImportReencryptsSecrets(t *testing.T) {
 		t.Fatalf("expected proxy password preserved, got %q, err=%v", plainPassB, err)
 	}
 
-	// Verify original API key works seamlessly in environment B
+	// Verify original API key works seamlessly in environment B and re-encrypted KeyEncrypted is decryptable by cipherB
 	gotClient, err := storeB.GetClientByKeyHash(ctx, crypto.HashAPIKey(plainKey))
 	if err != nil || gotClient.ID != "cl_1" {
 		t.Fatalf("expected original API key to resolve client in B, err=%v", err)
+	}
+	plainKeyB, err := cipherB.DecryptString(gotClient.KeyEncrypted)
+	if err != nil || plainKeyB != plainKey {
+		t.Fatalf("expected re-encrypted api key in B, got %q err=%v", plainKeyB, err)
 	}
 }
 

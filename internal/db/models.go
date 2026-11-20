@@ -37,6 +37,7 @@ type Client struct {
 	Description            string     `json:"description"`
 	KeyPrefix              string     `json:"key_prefix"`
 	KeyHash                string     `json:"-"`
+	KeyEncrypted           string     `json:"-"`
 	Enabled                bool       `json:"enabled"`
 	DefaultMode            string     `json:"default_mode"` // sync | async
 	PathPrefix             string     `json:"path_prefix"`

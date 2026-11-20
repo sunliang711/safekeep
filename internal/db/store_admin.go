@@ -450,11 +450,11 @@ func (s *Store) CreateClient(ctx context.Context, c *Client, upstreams []ClientU
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO clients(
-			id, name, description, key_prefix, key_hash, enabled,
+			id, name, description, key_prefix, key_hash, key_encrypted, enabled,
 			default_mode, path_prefix, max_file_size_bytes, allowed_mime_types_json,
 			rate_limit_rpm, webhook_url, webhook_secret_encrypted, expires_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.Name, c.Description, c.KeyPrefix, c.KeyHash, boolToInt(c.Enabled),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.Name, c.Description, c.KeyPrefix, c.KeyHash, c.KeyEncrypted, boolToInt(c.Enabled),
 		c.DefaultMode, c.PathPrefix, c.MaxFileSizeBytes, c.AllowedMimeTypesJSON,
 		c.RateLimitRPM, c.WebhookURL, c.WebhookSecretEncrypted, c.ExpiresAt, c.CreatedAt, c.UpdatedAt,
 	); err != nil {
@@ -496,10 +496,10 @@ func (s *Store) UpdateClient(ctx context.Context, c *Client) error {
 	return nil
 }
 
-func (s *Store) RotateClientKey(ctx context.Context, id, prefix, hash string) error {
+func (s *Store) RotateClientKey(ctx context.Context, id, prefix, hash, keyEncrypted string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE clients SET key_prefix = ?, key_hash = ?, updated_at = ? WHERE id = ?`,
-		prefix, hash, time.Now().UTC(), id,
+		`UPDATE clients SET key_prefix = ?, key_hash = ?, key_encrypted = ?, updated_at = ? WHERE id = ?`,
+		prefix, hash, keyEncrypted, time.Now().UTC(), id,
 	)
 	if err != nil {
 		return err
@@ -558,7 +558,7 @@ func (s *Store) DeleteClient(ctx context.Context, id string) error {
 
 func (s *Store) GetClientByID(ctx context.Context, id string) (*Client, error) {
 	return s.scanClient(s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, key_prefix, key_hash, enabled, default_mode,
+		`SELECT id, name, description, key_prefix, key_hash, key_encrypted, enabled, default_mode,
 			path_prefix, max_file_size_bytes, allowed_mime_types_json, rate_limit_rpm,
 			webhook_url, webhook_secret_encrypted, expires_at, last_used_at, created_at, updated_at
 		 FROM clients WHERE id = ?`, id))
@@ -566,7 +566,7 @@ func (s *Store) GetClientByID(ctx context.Context, id string) (*Client, error) {
 
 func (s *Store) GetClientByKeyHash(ctx context.Context, keyHash string) (*Client, error) {
 	return s.scanClient(s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, key_prefix, key_hash, enabled, default_mode,
+		`SELECT id, name, description, key_prefix, key_hash, key_encrypted, enabled, default_mode,
 			path_prefix, max_file_size_bytes, allowed_mime_types_json, rate_limit_rpm,
 			webhook_url, webhook_secret_encrypted, expires_at, last_used_at, created_at, updated_at
 		 FROM clients WHERE key_hash = ?`, keyHash))
@@ -574,7 +574,7 @@ func (s *Store) GetClientByKeyHash(ctx context.Context, keyHash string) (*Client
 
 func (s *Store) ListClients(ctx context.Context) ([]Client, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, description, key_prefix, key_hash, enabled, default_mode,
+		`SELECT id, name, description, key_prefix, key_hash, key_encrypted, enabled, default_mode,
 			path_prefix, max_file_size_bytes, allowed_mime_types_json, rate_limit_rpm,
 			webhook_url, webhook_secret_encrypted, expires_at, last_used_at, created_at, updated_at
 		 FROM clients ORDER BY created_at ASC`)
@@ -625,7 +625,7 @@ func (s *Store) scanClient(row rowScanner) (*Client, error) {
 	var enabled int
 	var expiresAt, lastUsedAt sql.NullTime
 	if err := row.Scan(
-		&c.ID, &c.Name, &c.Description, &c.KeyPrefix, &c.KeyHash, &enabled, &c.DefaultMode,
+		&c.ID, &c.Name, &c.Description, &c.KeyPrefix, &c.KeyHash, &c.KeyEncrypted, &enabled, &c.DefaultMode,
 		&c.PathPrefix, &c.MaxFileSizeBytes, &c.AllowedMimeTypesJSON, &c.RateLimitRPM,
 		&c.WebhookURL, &c.WebhookSecretEncrypted, &expiresAt, &lastUsedAt, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {

@@ -981,6 +981,7 @@ type clientUpstreamInput struct {
 
 type clientDTO struct {
 	db.Client
+	HasAPIKey        bool                `json:"has_api_key"`
 	HasWebhookSecret bool                `json:"has_webhook_secret"`
 	AllowedMimeTypes []string            `json:"allowed_mime_types"`
 	Upstreams        []db.ClientUpstream `json:"upstreams"`
@@ -998,6 +999,7 @@ func (s *Server) toClientDTO(ctx context.Context, c db.Client) clientDTO {
 	}
 	return clientDTO{
 		Client:           c,
+		HasAPIKey:        c.KeyEncrypted != "",
 		HasWebhookSecret: c.WebhookSecretEncrypted != "",
 		AllowedMimeTypes: mimes,
 		Upstreams:        ups,
@@ -1016,6 +1018,15 @@ func (s *Server) handleRevealClientSecrets(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
 		return
 	}
+	apiKey := ""
+	if c.KeyEncrypted != "" {
+		var decErr error
+		apiKey, decErr = s.cipher.DecryptString(c.KeyEncrypted)
+		if decErr != nil {
+			writeError(w, http.StatusInternalServerError, "decrypt_failed", "failed to decrypt api key")
+			return
+		}
+	}
 	whSecret := ""
 	if c.WebhookSecretEncrypted != "" {
 		whSecret, _ = s.cipher.DecryptString(c.WebhookSecretEncrypted)
@@ -1033,6 +1044,7 @@ func (s *Server) handleRevealClientSecrets(w http.ResponseWriter, r *http.Reques
 		Detail:       map[string]any{"name": c.Name},
 	})
 	writeJSON(w, http.StatusOK, map[string]string{
+		"api_key":        apiKey,
 		"webhook_secret": whSecret,
 	})
 }
@@ -1096,6 +1108,11 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "keygen_error", err.Error())
 		return
 	}
+	keyEnc, err := s.cipher.EncryptString(plainKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encrypt_error", err.Error())
+		return
+	}
 	mimesBytes, _ := json.Marshal(req.AllowedMimeTypes)
 	whEnc, _ := s.cipher.EncryptString(req.WebhookSecret)
 
@@ -1105,6 +1122,7 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		Description:            req.Description,
 		KeyPrefix:              prefix,
 		KeyHash:                hash,
+		KeyEncrypted:           keyEnc,
 		Enabled:                req.Enabled,
 		DefaultMode:            req.DefaultMode,
 		PathPrefix:             strings.Trim(req.PathPrefix, "/"),
@@ -1291,7 +1309,12 @@ func (s *Server) handleRotateClientKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "keygen_error", err.Error())
 		return
 	}
-	if err := s.store.RotateClientKey(r.Context(), id, prefix, hash); err != nil {
+	keyEnc, err := s.cipher.EncryptString(plainKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encrypt_error", err.Error())
+		return
+	}
+	if err := s.store.RotateClientKey(r.Context(), id, prefix, hash, keyEnc); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "client not found")
 			return

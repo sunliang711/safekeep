@@ -10,6 +10,7 @@ interface SecretFieldProps {
   hasSaved?: boolean
   onReveal?: () => Promise<string>
   disabled?: boolean
+  readOnly?: boolean
   required?: boolean
   placeholder?: string
   autoComplete?: string
@@ -22,6 +23,7 @@ export const SecretField: React.FC<SecretFieldProps> = ({
   hasSaved = false,
   onReveal,
   disabled = false,
+  readOnly = false,
   required = false,
   placeholder,
   autoComplete = 'off',
@@ -117,10 +119,11 @@ export const SecretField: React.FC<SecretFieldProps> = ({
           type={showingSavedMask ? 'text' : showPlain ? 'text' : 'password'}
           required={required}
           disabled={disabled}
+          readOnly={readOnly}
           value={displayValue}
-          placeholder={placeholder ?? (hasSaved ? '留空则保持不变，点击直接输入新值' : '请输入')}
+          placeholder={placeholder ?? (hasSaved ? (readOnly ? '点击右侧查看或复制' : '留空则保持不变，点击直接输入新值') : '请输入')}
           onFocus={() => {
-            if (!disabled && hasSaved && !editing) {
+            if (!disabled && !readOnly && hasSaved && !editing) {
               setEditing(true)
               onChange('')
             }
@@ -131,6 +134,7 @@ export const SecretField: React.FC<SecretFieldProps> = ({
             }
           }}
           onChange={(e) => {
+            if (readOnly) return
             if (!editing) setEditing(true)
             onChange(e.target.value)
           }}
