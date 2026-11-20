@@ -88,8 +88,8 @@ var bundleMagic = []byte{'S', 'K', 'B', '1'}
 
 // EncryptWithPassphrase encrypts arbitrary bytes using Argon2id key derivation + AES-256-GCM.
 func EncryptWithPassphrase(plaintext []byte, passphrase string) ([]byte, error) {
-	if len(passphrase) < 6 {
-		return nil, errors.New("passphrase must be at least 6 characters")
+	if passphrase != "" && len(passphrase) < 6 {
+		return nil, errors.New("passphrase must be at least 6 characters (or empty)")
 	}
 	salt := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {

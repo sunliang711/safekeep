@@ -148,18 +148,75 @@ func (s *Server) handleAdminDownloadTask(w http.ResponseWriter, r *http.Request)
 
 // --- Cron Jobs ---
 
+func sanitizeCronJobDTO(j db.CronJob) db.CronJob {
+	if j.JobKey == "migration_backup" {
+		j.ConfigJSON = scheduler.SanitizeMigrationBackupConfigJSON(j.ConfigJSON)
+	}
+	return j
+}
+
 func (s *Server) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := s.store.ListCronJobs(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
+	for i := range jobs {
+		jobs[i] = sanitizeCronJobDTO(jobs[i])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": jobs})
+}
+
+func (s *Server) handleRevealCronJobSecrets(w http.ResponseWriter, r *http.Request) {
+	admin := currentAdmin(r)
+	id := chi.URLParam(r, "id")
+	job, err := s.store.GetCronJobByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "cron job not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
+	var apiKey, passphrase string
+	if job.JobKey == "migration_backup" {
+		apiKey, passphrase, err = scheduler.RevealMigrationBackupSecrets(s.cipher, job.ConfigJSON)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "decrypt_failed", err.Error())
+			return
+		}
+	}
+	s.auditLog.Record(r.Context(), audit.Event{
+		ActorType:    "admin",
+		ActorID:      admin.ID,
+		ActorName:    admin.Username,
+		Action:       "cron.reveal_secrets",
+		ResourceType: "cron_job",
+		ResourceID:   job.ID,
+		IPAddress:    clientIP(r),
+		UserAgent:    r.UserAgent(),
+		RequestID:    middleware.GetReqID(r.Context()),
+		Detail:       map[string]any{"job_key": job.JobKey},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"api_key":    apiKey,
+		"passphrase": passphrase,
+	})
 }
 
 func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 	admin := currentAdmin(r)
 	id := chi.URLParam(r, "id")
+	existing, err := s.store.GetCronJobByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "cron job not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
 	var req struct {
 		CronExpr string          `json:"cron_expr"`
 		Enabled  bool            `json:"enabled"`
@@ -174,7 +231,13 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfgStr := "{}"
-	if len(req.Config) > 0 && json.Valid(req.Config) {
+	if existing.JobKey == "migration_backup" {
+		cfgStr, err = scheduler.MergeMigrationBackupConfig(s.cipher, existing.ConfigJSON, req.Config)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+			return
+		}
+	} else if len(req.Config) > 0 && json.Valid(req.Config) {
 		cfgStr = string(req.Config)
 	}
 	if err := s.store.UpdateCronJob(r.Context(), id, strings.TrimSpace(req.CronExpr), req.Enabled, cfgStr); err != nil {
@@ -199,10 +262,14 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
-		Detail:       map[string]any{"cron_expr": req.CronExpr, "enabled": req.Enabled},
+		Detail:       map[string]any{"job_key": existing.JobKey, "cron_expr": req.CronExpr, "enabled": req.Enabled},
 	})
 	job, _ := s.store.GetCronJobByID(r.Context(), id)
-	writeJSON(w, http.StatusOK, job)
+	if job == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+		return
+	}
+	writeJSON(w, http.StatusOK, sanitizeCronJobDTO(*job))
 }
 
 func (s *Server) handleRunCronJob(w http.ResponseWriter, r *http.Request) {

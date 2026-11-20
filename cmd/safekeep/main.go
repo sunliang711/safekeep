@@ -117,13 +117,13 @@ func main() {
 	backupSvc.SetEnqueuer(pool)
 	pool.Start(appCtx)
 
+	migSvc := migration.NewService(store, cipher)
 	sched := scheduler.NewEngine(appCtx, store, registry, auditLog, logger)
+	sched.SetMigrationBackupDeps(cipher, migSvc, scheduler.DeriveLocalBaseURL(boot.ListenAddr))
 	if err := sched.Start(); err != nil {
 		logger.Error("start cron scheduler failed", "err", err)
 		os.Exit(1)
 	}
-
-	migSvc := migration.NewService(store, cipher)
 	webFS, err := web.DistFS()
 	if err != nil {
 		logger.Error("load embedded web assets failed", "err", err)

@@ -149,8 +149,8 @@ func NewService(store *db.Store, cipher *crypto.Cipher) *Service {
 
 // Export decrypts local secrets, builds a portable Bundle, and encrypts it with opts.Passphrase.
 func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error) {
-	if len(opts.Passphrase) < 6 {
-		return nil, fmt.Errorf("migration passphrase must be at least 6 characters")
+	if opts.Passphrase != "" && len(opts.Passphrase) < 6 {
+		return nil, fmt.Errorf("migration passphrase must be at least 6 characters (or empty)")
 	}
 
 	var data BundleData
@@ -263,11 +263,21 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 		return nil, err
 	}
 
-	// 4. Cron Jobs
-	data.CronJobs, err = s.store.ListCronJobs(ctx)
+	// 4. Cron Jobs (decrypt migration_backup secrets for portable export)
+	cronJobs, err := s.store.ListCronJobs(ctx)
 	if err != nil {
 		return nil, err
 	}
+	for i := range cronJobs {
+		if cronJobs[i].JobKey == "migration_backup" {
+			cfgJSON, cErr := reencryptCronConfigForExport(s.cipher, cronJobs[i].ConfigJSON)
+			if cErr != nil {
+				return nil, fmt.Errorf("decrypt migration_backup cron config: %w", cErr)
+			}
+			cronJobs[i].ConfigJSON = cfgJSON
+		}
+	}
+	data.CronJobs = cronJobs
 
 	// 5. Optional Admins
 	if opts.IncludeAdmins {
@@ -695,14 +705,22 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		}
 	}
 
-	// 5. CronJobs (update config by job_key)
+	// 5. CronJobs (update config by job_key; re-encrypt migration_backup secrets with target cipher)
 	for _, j := range b.Data.CronJobs {
 		if mode == "merge" && conflict == "skip" {
 			continue
 		}
+		cfgJSON := j.ConfigJSON
+		if j.JobKey == "migration_backup" {
+			var cErr error
+			cfgJSON, cErr = reencryptCronConfigForImport(s.cipher, cfgJSON, clientIDMap)
+			if cErr != nil {
+				return nil, fmt.Errorf("re-encrypt migration_backup cron config: %w", cErr)
+			}
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE cron_jobs SET cron_expr = ?, enabled = ?, config_json = ?, updated_at = ? WHERE job_key = ?`,
-			j.CronExpr, boolInt(j.Enabled), j.ConfigJSON, time.Now().UTC(), j.JobKey,
+			j.CronExpr, boolInt(j.Enabled), cfgJSON, time.Now().UTC(), j.JobKey,
 		); err != nil {
 			return nil, err
 		}
@@ -821,4 +839,67 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func reencryptCronConfigForExport(c *crypto.Cipher, raw string) (string, error) {
+	if raw == "" {
+		return "{}", nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
+		return raw, nil
+	}
+	for _, pair := range [][2]string{
+		{"api_key_encrypted", "api_key"},
+		{"passphrase_encrypted", "passphrase"},
+	} {
+		encKey, plainKey := pair[0], pair[1]
+		if enc, _ := m[encKey].(string); enc != "" {
+			plain, err := c.DecryptString(enc)
+			if err != nil {
+				return "", err
+			}
+			m[plainKey] = plain
+		}
+		delete(m, encKey)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func reencryptCronConfigForImport(c *crypto.Cipher, raw string, clientIDMap map[string]string) (string, error) {
+	if raw == "" {
+		return "{}", nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
+		return raw, nil
+	}
+	if cid, _ := m["client_id"].(string); cid != "" {
+		if mapped, ok := clientIDMap[cid]; ok {
+			m["client_id"] = mapped
+		}
+	}
+	for _, pair := range [][2]string{
+		{"api_key", "api_key_encrypted"},
+		{"passphrase", "passphrase_encrypted"},
+	} {
+		plainKey, encKey := pair[0], pair[1]
+		if plain, _ := m[plainKey].(string); plain != "" {
+			enc, err := c.EncryptString(plain)
+			if err != nil {
+				return "", err
+			}
+			m[encKey] = enc
+		}
+		delete(m, plainKey)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

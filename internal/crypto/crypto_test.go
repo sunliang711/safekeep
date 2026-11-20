@@ -52,6 +52,21 @@ func TestPassphraseBundleRoundtrip(t *testing.T) {
 	if _, err := DecryptWithPassphrase(blob, "wrong-passphrase"); err == nil {
 		t.Fatal("expected error with wrong passphrase")
 	}
+
+	// Empty passphrase is also supported
+	emptyBlob, err := EncryptWithPassphrase(payload, "")
+	if err != nil {
+		t.Fatalf("EncryptWithPassphrase empty: %v", err)
+	}
+	emptyOut, err := DecryptWithPassphrase(emptyBlob, "")
+	if err != nil || !bytes.Equal(emptyOut, payload) {
+		t.Fatalf("DecryptWithPassphrase empty mismatch: err=%v out=%s", err, emptyOut)
+	}
+
+	// Short non-empty passphrase must still fail
+	if _, err := EncryptWithPassphrase(payload, "12345"); err == nil {
+		t.Fatal("expected error for 5-char passphrase")
+	}
 }
 
 func TestAPIKeyGeneration(t *testing.T) {

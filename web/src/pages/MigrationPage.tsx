@@ -28,6 +28,10 @@ export const MigrationPage: React.FC = () => {
 
   const handleExport = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (expPass !== '' && expPass.length < 6) {
+      toast.error('迁移口令若设置，需至少 6 位（或留空不设口令）')
+      return
+    }
     setExporting(true)
     try {
       await api.exportMigration({
@@ -45,7 +49,7 @@ export const MigrationPage: React.FC = () => {
   }
 
   const handleInspect = async () => {
-    if (!impFile || !impPass) return
+    if (!impFile) return
     setInspecting(true)
     const fd = new FormData()
     fd.append('bundle', impFile)
@@ -63,7 +67,7 @@ export const MigrationPage: React.FC = () => {
   }
 
   const handleImport = async () => {
-    if (!impFile || !impPass || !inspectRes || importing) return
+    if (!impFile || !inspectRes || importing) return
     if (impMode === 'replace' && !confirm('确定使用「覆盖恢复」模式？当前环境的上游与客户配置将被清空替换为迁移包快照！')) {
       return
     }
@@ -125,14 +129,12 @@ export const MigrationPage: React.FC = () => {
               </label>
             </div>
             <div>
-              <label htmlFor="migration-field-1" className="block text-xs text-slate-600 mb-1">设置迁移加密口令（至少 6 位，导入时需验证）*</label>
+              <label htmlFor="migration-field-1" className="block text-xs text-slate-600 mb-1">设置迁移加密口令（可选，留空则不设口令；如设置需至少 6 位）</label>
               <input id="migration-field-1"
                 type="password"
-                required
-                minLength={6}
                 value={expPass}
                 onChange={(e) => setExpPass(e.target.value)}
-                placeholder="请输入加密口令"
+                placeholder="可选，留空则不设口令"
                 className="w-full px-3 py-2 border rounded-lg"
               />
             </div>
@@ -170,8 +172,8 @@ export const MigrationPage: React.FC = () => {
               />
             </div>
             <div>
-              <label htmlFor="migration-field-3" className="block text-xs text-slate-600 mb-1">迁移包解密口令</label>
-              <input id="migration-field-3" aria-label="迁移包解密口令" autoComplete="off" disabled={inspecting || importing} type="password" value={impPass} onChange={(e) => { setImpPass(e.target.value); setInspectRes(null) }} className="w-full px-3 py-2 border rounded-lg" />
+              <label htmlFor="migration-field-3" className="block text-xs text-slate-600 mb-1">迁移包解密口令（如导出时未设口令请留空）</label>
+              <input id="migration-field-3" aria-label="迁移包解密口令" autoComplete="off" disabled={inspecting || importing} type="password" value={impPass} onChange={(e) => { setImpPass(e.target.value); setInspectRes(null) }} placeholder="如导出时未设口令可留空" className="w-full px-3 py-2 border rounded-lg" />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
@@ -210,7 +212,7 @@ export const MigrationPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleInspect}
-                disabled={!impFile || !impPass || inspecting || importing}
+                disabled={!impFile || inspecting || importing}
                 className="px-4 py-2 border rounded-lg hover:bg-slate-50 disabled:opacity-50"
               >
                 {inspecting ? '预检中...' : '预检包内容'}
@@ -218,7 +220,7 @@ export const MigrationPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleImport}
-                disabled={!impFile || !impPass || !inspectRes || inspecting || importing}
+                disabled={!impFile || !inspectRes || inspecting || importing}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:opacity-50"
               >
                 {importing ? '导入中...' : '执行环境恢复'}

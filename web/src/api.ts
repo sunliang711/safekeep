@@ -119,6 +119,8 @@ export const api = {
   },
 
   listCronJobs: () => req<{ items: CronJob[] }>('/admin/api/v1/cron-jobs'),
+  revealCronSecrets: (id: string) =>
+    req<{ api_key?: string; passphrase?: string }>(`/admin/api/v1/cron-jobs/${id}/secrets`),
   updateCronJob: (id: string, payload: { cron_expr: string; enabled: boolean; config: any }) =>
     req<CronJob>(`/admin/api/v1/cron-jobs/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   runCronJob: (id: string) => req<CronJobRun>(`/admin/api/v1/cron-jobs/${id}/run`, { method: 'POST' }),

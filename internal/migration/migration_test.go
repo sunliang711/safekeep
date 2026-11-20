@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,6 +150,43 @@ func TestExportInspectImportReencryptsSecrets(t *testing.T) {
 	plainKeyB, err := cipherB.DecryptString(gotClient.KeyEncrypted)
 	if err != nil || plainKeyB != plainKey {
 		t.Fatalf("expected re-encrypted api key in B, got %q err=%v", plainKeyB, err)
+	}
+
+	// Empty-passphrase export/inspect/import roundtrip + migration_backup cron secret re-encryption
+	passEncA, _ := cipherA.EncryptString("cron-pass-123")
+	apiKeyEncA, _ := cipherA.EncryptString("sk_cron_secret_123")
+	cronJobsA, _ := storeA.ListCronJobs(ctx)
+	for _, cj := range cronJobsA {
+		if cj.JobKey == "migration_backup" {
+			cfg := `{"api_base_url":"https://ext.example.com","client_id":"cl_1","api_key_encrypted":"` + apiKeyEncA + `","passphrase_encrypted":"` + passEncA + `","path":"mig","mode":"sync","include_admins":true}`
+			if err := storeA.UpdateCronJob(ctx, cj.ID, "0 5 * * *", true, cfg); err != nil {
+				t.Fatalf("UpdateCronJob: %v", err)
+			}
+		}
+	}
+	noPassBlob, err := migA.Export(ctx, ExportOptions{Passphrase: "", IncludeAdmins: true})
+	if err != nil {
+		t.Fatalf("Export with empty passphrase: %v", err)
+	}
+	noPassSummary, err := migB.Inspect(ctx, noPassBlob, "")
+	if err != nil || noPassSummary.Counts.CronJobs < 6 {
+		t.Fatalf("Inspect empty passphrase failed: err=%v summary=%+v", err, noPassSummary)
+	}
+	if _, err := migB.Import(ctx, noPassBlob, ImportOptions{Passphrase: "", Mode: "merge", ConflictStrategy: "overwrite", IncludeAdmins: true}); err != nil {
+		t.Fatalf("Import empty passphrase: %v", err)
+	}
+	cronJobsB, _ := storeB.ListCronJobs(ctx)
+	var checkedMB bool
+	for _, cj := range cronJobsB {
+		if cj.JobKey == "migration_backup" {
+			checkedMB = true
+			if strings.Contains(cj.ConfigJSON, "sk_cron_secret_123") || strings.Contains(cj.ConfigJSON, "cron-pass-123") {
+				t.Fatalf("cron config_json must not store plaintext secrets: %s", cj.ConfigJSON)
+			}
+		}
+	}
+	if !checkedMB {
+		t.Fatal("expected migration_backup cron job in storeB")
 	}
 }
 

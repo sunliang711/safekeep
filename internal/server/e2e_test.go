@@ -40,6 +40,7 @@ type testEnv struct {
 	srv     *httptest.Server
 	store   *db.Store
 	cipher  *crypto.Cipher
+	migSvc  *migration.Service
 	pool    *queue.WorkerPool
 	sched   *scheduler.Engine
 	cancel  context.CancelFunc
@@ -79,6 +80,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	s := New(store, cipher, reg, backupSvc, pool, sched, migSvc, auditLog, logger, webFS)
 	ts := httptest.NewServer(s.Router())
+	sched.SetMigrationBackupDeps(cipher, migSvc, ts.URL)
 
 	t.Cleanup(func() {
 		ts.Close()
@@ -88,7 +90,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		_ = store.Close()
 	})
 
-	return &testEnv{srv: ts, store: store, cipher: cipher, pool: pool, sched: sched, cancel: cancel}
+	return &testEnv{srv: ts, store: store, cipher: cipher, migSvc: migSvc, pool: pool, sched: sched, cancel: cancel}
 }
 
 func (e *testEnv) adminReq(t *testing.T, method, path string, body any) *http.Response {
@@ -906,5 +908,165 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	searchResp.Body.Close()
 	if searchResp.StatusCode != http.StatusOK || searchList.Total != 1 || searchList.Items[0].OriginalFilename != "web-upload.txt" {
 		t.Fatalf("expected search by remote_filename to find web-upload.txt, got %+v", searchList)
+	}
+
+	// 17. Cron migration_backup via real HTTP (local SafeKeep + external SafeKeep, optional passphrase)
+	// Restore file size / traffic quotas lowered during step 14 circuit-breaker & oversize alert tests
+	restoreSettings, _ := env.store.GetSystemSettings(context.Background())
+	restoreSettings.MaxFileSizeBytes = 10 * 1024 * 1024
+	restoreSettings.DailyTrafficLimitBytes = 10 * 1024 * 1024
+	if err := env.store.UpdateSystemSettings(context.Background(), restoreSettings, "test"); err != nil {
+		t.Fatalf("restore system settings: %v", err)
+	}
+	cronJobsResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/cron-jobs", nil)
+	var allCron struct {
+		Items []db.CronJob `json:"items"`
+	}
+	_ = json.NewDecoder(cronJobsResp.Body).Decode(&allCron)
+	cronJobsResp.Body.Close()
+	var mbJob db.CronJob
+	for _, j := range allCron.Items {
+		if j.JobKey == "migration_backup" {
+			mbJob = j
+			break
+		}
+	}
+	if mbJob.ID == "" {
+		t.Fatalf("expected built-in migration_backup cron job, got %+v", allCron.Items)
+	}
+
+	// 17a. Configure local HTTP backup with empty passphrase
+	updMBResp := env.adminReq(t, http.MethodPut, "/admin/api/v1/cron-jobs/"+mbJob.ID, map[string]any{
+		"cron_expr": "0 4 * * *",
+		"enabled":   true,
+		"config": map[string]any{
+			"api_base_url":   "",
+			"client_id":      clOut.Client.ID,
+			"targets":        "mock-s3",
+			"path":           "mig-auto",
+			"mode":           "sync",
+			"rename":         "",
+			"passphrase":     "",
+			"include_admins": true,
+		},
+	})
+	updMBResp.Body.Close()
+	if updMBResp.StatusCode != http.StatusOK {
+		t.Fatalf("update migration_backup cron failed: %d", updMBResp.StatusCode)
+	}
+
+	runLocalMBResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/cron-jobs/"+mbJob.ID+"/run", nil)
+	var runLocalMB db.CronJobRun
+	_ = json.NewDecoder(runLocalMBResp.Body).Decode(&runLocalMB)
+	runLocalMBResp.Body.Close()
+	if runLocalMBResp.StatusCode != http.StatusOK || runLocalMB.Status != "succeeded" {
+		t.Fatalf("expected local migration_backup run succeeded, got code=%d run=%+v", runLocalMBResp.StatusCode, runLocalMB)
+	}
+
+	var autoBundle []byte
+	s3Mu.Lock()
+	for k, v := range s3Objects {
+		if strings.HasPrefix(k, "tenant-a/mig-auto/safekeep-migration-") && strings.HasSuffix(k, ".skbundle") {
+			autoBundle = v
+			break
+		}
+	}
+	s3Mu.Unlock()
+	if len(autoBundle) == 0 {
+		t.Fatalf("expected migration bundle uploaded via local HTTP API into mock-s3, keys=%v", s3Objects)
+	}
+	autoSummary, err := env.migSvc.Inspect(context.Background(), autoBundle, "")
+	if err != nil || autoSummary.Counts.Upstreams < 2 || autoSummary.Counts.Admins < 1 {
+		t.Fatalf("expected empty-passphrase auto bundle valid, err=%v summary=%+v", err, autoSummary)
+	}
+
+	// 17b. Configure external SafeKeep HTTP target with custom API key, passphrase, and fixed rename
+	var extMu sync.Mutex
+	var extKey, extRename, extPath string
+	var extBundle []byte
+	extSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/backups" || r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f, _, err := r.FormFile("file")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer f.Close()
+		b, _ := io.ReadAll(f)
+		extMu.Lock()
+		extKey = r.Header.Get("X-API-Key")
+		extRename = r.FormValue("rename")
+		extPath = r.FormValue("path")
+		extBundle = b
+		extMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"task": map[string]any{
+				"id":                "ext_task_1",
+				"status":            "succeeded",
+				"original_filename": "mig.skbundle",
+				"remote_filename":   extRename,
+			},
+		})
+	}))
+	defer extSrv.Close()
+
+	updExtResp := env.adminReq(t, http.MethodPut, "/admin/api/v1/cron-jobs/"+mbJob.ID, map[string]any{
+		"cron_expr": "0 5 * * *",
+		"enabled":   true,
+		"config": map[string]any{
+			"api_base_url":   extSrv.URL,
+			"client_id":      "",
+			"api_key":        "sk_ext_secret_key",
+			"targets":        "ext-s3",
+			"path":           "ext-mig",
+			"mode":           "sync",
+			"rename":         "latest.skbundle",
+			"passphrase":     "ext-pass-99",
+			"include_admins": true,
+		},
+	})
+	var updExtJob db.CronJob
+	_ = json.NewDecoder(updExtResp.Body).Decode(&updExtJob)
+	updExtResp.Body.Close()
+	if updExtResp.StatusCode != http.StatusOK {
+		t.Fatalf("update external migration_backup failed: %d", updExtResp.StatusCode)
+	}
+	if strings.Contains(updExtJob.ConfigJSON, "sk_ext_secret_key") || strings.Contains(updExtJob.ConfigJSON, "ext-pass-99") {
+		t.Fatalf("cron job DTO must mask secrets, got %s", updExtJob.ConfigJSON)
+	}
+	if !strings.Contains(updExtJob.ConfigJSON, `"has_api_key":true`) || !strings.Contains(updExtJob.ConfigJSON, `"has_passphrase":true`) {
+		t.Fatalf("expected has_api_key & has_passphrase flags, got %s", updExtJob.ConfigJSON)
+	}
+
+	cronSecretResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/cron-jobs/"+mbJob.ID+"/secrets", nil)
+	var cronSecrets map[string]string
+	_ = json.NewDecoder(cronSecretResp.Body).Decode(&cronSecrets)
+	cronSecretResp.Body.Close()
+	if cronSecretResp.StatusCode != http.StatusOK || cronSecrets["api_key"] != "sk_ext_secret_key" || cronSecrets["passphrase"] != "ext-pass-99" {
+		t.Fatalf("expected cron secrets revealed, got code=%d out=%+v", cronSecretResp.StatusCode, cronSecrets)
+	}
+
+	runExtResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/cron-jobs/"+mbJob.ID+"/run", nil)
+	var runExtMB db.CronJobRun
+	_ = json.NewDecoder(runExtResp.Body).Decode(&runExtMB)
+	runExtResp.Body.Close()
+	if runExtResp.StatusCode != http.StatusOK || runExtMB.Status != "succeeded" {
+		t.Fatalf("expected external migration_backup run succeeded, got code=%d run=%+v", runExtResp.StatusCode, runExtMB)
+	}
+	extMu.Lock()
+	gotExtKey, gotExtRename, gotExtPath, gotExtBundle := extKey, extRename, extPath, extBundle
+	extMu.Unlock()
+	if gotExtKey != "sk_ext_secret_key" || gotExtRename != "latest.skbundle" || gotExtPath != "ext-mig" || len(gotExtBundle) == 0 {
+		t.Fatalf("unexpected external request fields: key=%q rename=%q path=%q len=%d", gotExtKey, gotExtRename, gotExtPath, len(gotExtBundle))
+	}
+	if _, err := env.migSvc.Inspect(context.Background(), gotExtBundle, "ext-pass-99"); err != nil {
+		t.Fatalf("expected external bundle decryptable with ext-pass-99: %v", err)
 	}
 }

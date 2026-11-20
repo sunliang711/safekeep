@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,16 +17,21 @@ import (
 	"safekeep/internal/audit"
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
+	"safekeep/internal/migration"
 	"safekeep/internal/storage"
 	"safekeep/internal/storage/dropbox"
 )
 
 // Engine wraps robfig/cron and executes built-in maintenance jobs.
 type Engine struct {
-	store    *db.Store
-	registry *storage.Registry
-	auditLog *audit.Logger
-	logger   *slog.Logger
+	store        *db.Store
+	registry     *storage.Registry
+	auditLog     *audit.Logger
+	logger       *slog.Logger
+	cipher       *crypto.Cipher
+	migSvc       *migration.Service
+	localBaseURL string
+	httpClient   *http.Client
 
 	mu       sync.Mutex
 	c        *cron.Cron
@@ -36,14 +42,24 @@ type Engine struct {
 
 func NewEngine(appCtx context.Context, store *db.Store, registry *storage.Registry, auditLog *audit.Logger, logger *slog.Logger) *Engine {
 	return &Engine{
-		store:    store,
-		registry: registry,
-		auditLog: auditLog,
-		logger:   logger,
-		entryIDs: make(map[string]cron.EntryID),
-		running:  make(map[string]bool),
-		appCtx:   appCtx,
+		store:      store,
+		registry:   registry,
+		auditLog:   auditLog,
+		logger:     logger,
+		httpClient: &http.Client{Timeout: 5 * time.Minute},
+		entryIDs:   make(map[string]cron.EntryID),
+		running:    make(map[string]bool),
+		appCtx:     appCtx,
 	}
+}
+
+// SetMigrationBackupDeps configures dependencies needed by the migration_backup job.
+func (e *Engine) SetMigrationBackupDeps(cipher *crypto.Cipher, migSvc *migration.Service, localBaseURL string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cipher = cipher
+	e.migSvc = migSvc
+	e.localBaseURL = strings.TrimRight(strings.TrimSpace(localBaseURL), "/")
 }
 
 func (e *Engine) Start() error {
@@ -368,6 +384,9 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 			return refreshed, fmt.Sprintf("refreshed %d dropbox upstreams (%d failed)", refreshed, failed), fmt.Errorf("%d dropbox refresh failed", failed)
 		}
 		return refreshed, fmt.Sprintf("refreshed %d dropbox upstreams", refreshed), nil
+
+	case "migration_backup":
+		return e.runMigrationBackup(ctx, job.ConfigJSON)
 
 	default:
 		return 0, "", fmt.Errorf("unknown job_key %q", job.JobKey)
