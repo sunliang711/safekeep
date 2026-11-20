@@ -172,6 +172,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/tasks/{id}/download", s.handleAdminDownloadTask)
 
 			r.Get("/cron-jobs", s.handleListCronJobs)
+			r.Post("/cron-jobs/preview", s.handlePreviewCronSchedule)
 			r.Get("/cron-jobs/{id}/secrets", s.handleRevealCronJobSecrets)
 			r.Put("/cron-jobs/{id}", s.handleUpdateCronJob)
 			r.Post("/cron-jobs/{id}/run", s.handleRunCronJob)

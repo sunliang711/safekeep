@@ -719,8 +719,8 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 			}
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE cron_jobs SET cron_expr = ?, enabled = ?, config_json = ?, updated_at = ? WHERE job_key = ?`,
-			j.CronExpr, boolInt(j.Enabled), cfgJSON, time.Now().UTC(), j.JobKey,
+			`UPDATE cron_jobs SET cron_expr = ?, enabled = ?, timeout_sec = CASE WHEN ? > 0 THEN ? ELSE timeout_sec END, config_json = ?, updated_at = ? WHERE job_key = ?`,
+			j.CronExpr, boolInt(j.Enabled), j.TimeoutSec, j.TimeoutSec, cfgJSON, time.Now().UTC(), j.JobKey,
 		); err != nil {
 			return nil, err
 		}

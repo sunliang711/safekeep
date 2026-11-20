@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,124 @@ import (
 	"safekeep/internal/storage"
 	"safekeep/internal/storage/dropbox"
 )
+
+var cronParser = cron.NewParser(
+	cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+)
+
+type jobMeta struct {
+	DefaultSchedule string
+	DefaultTimeout  int
+}
+
+var builtinJobMeta = map[string]jobMeta{
+	"cleanup_audit_logs":    {DefaultSchedule: "0 2 * * *", DefaultTimeout: 300},
+	"cleanup_task_records":  {DefaultSchedule: "0 3 * * *", DefaultTimeout: 300},
+	"cleanup_orphan_spool":  {DefaultSchedule: "0 * * * *", DefaultTimeout: 300},
+	"upstream_health_check": {DefaultSchedule: "*/30 * * * *", DefaultTimeout: 180},
+	"dropbox_token_refresh": {DefaultSchedule: "0 */4 * * *", DefaultTimeout: 120},
+	"migration_backup":      {DefaultSchedule: "0 4 * * *", DefaultTimeout: 300},
+}
+
+// DefaultScheduleFor returns the built-in default cron expression for a job_key.
+func DefaultScheduleFor(jobKey string) string {
+	if m, ok := builtinJobMeta[jobKey]; ok {
+		return m.DefaultSchedule
+	}
+	return "0 4 * * *"
+}
+
+// DefaultTimeoutFor returns the built-in default timeout in seconds for a job_key.
+func DefaultTimeoutFor(jobKey string) int {
+	if m, ok := builtinJobMeta[jobKey]; ok && m.DefaultTimeout > 0 {
+		return m.DefaultTimeout
+	}
+	return 300
+}
+
+// PreviewCron validates a cron expression and returns the next count execution times in local time.
+func PreviewCron(expr string, count int) ([]time.Time, error) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return nil, errors.New("cron expression is required")
+	}
+	sched, err := cronParser.Parse(expr)
+	if err != nil {
+		return nil, err
+	}
+	if count <= 0 {
+		count = 5
+	}
+	out := make([]time.Time, 0, count)
+	at := time.Now()
+	for i := 0; i < count; i++ {
+		at = sched.Next(at)
+		if at.IsZero() {
+			break
+		}
+		out = append(out, at)
+	}
+	return out, nil
+}
+
+// NormalizeJobConfig validates and normalizes config JSON for non-migration built-in jobs.
+func NormalizeJobConfig(jobKey string, incoming json.RawMessage) (string, error) {
+	var raw map[string]any
+	if len(incoming) > 0 {
+		if err := json.Unmarshal(incoming, &raw); err != nil {
+			return "", fmt.Errorf("invalid config JSON: %w", err)
+		}
+	}
+	switch jobKey {
+	case "cleanup_audit_logs":
+		days := intFromMap(raw, "retention_days", 90)
+		if days < 1 || days > 36500 {
+			return "", errors.New("retention_days must be between 1 and 36500")
+		}
+		b, _ := json.Marshal(map[string]int{"retention_days": days})
+		return string(b), nil
+
+	case "cleanup_task_records":
+		days := intFromMap(raw, "retention_days", 180)
+		if days < 1 || days > 36500 {
+			return "", errors.New("retention_days must be between 1 and 36500")
+		}
+		b, _ := json.Marshal(map[string]int{"retention_days": days})
+		return string(b), nil
+
+	case "cleanup_orphan_spool":
+		maxAge := intFromMap(raw, "max_age_hours", 24)
+		if maxAge < 1 || maxAge > 8760 {
+			return "", errors.New("max_age_hours must be between 1 and 8760")
+		}
+		failedHours := intFromMap(raw, "failed_spool_retention_hours", 72)
+		if failedHours < 1 || failedHours > 8760 {
+			return "", errors.New("failed_spool_retention_hours must be between 1 and 8760")
+		}
+		b, _ := json.Marshal(map[string]int{
+			"max_age_hours":                maxAge,
+			"failed_spool_retention_hours": failedHours,
+		})
+		return string(b), nil
+
+	case "upstream_health_check":
+		probeTimeout := intFromMap(raw, "probe_timeout_sec", 20)
+		if probeTimeout < 1 || probeTimeout > 120 {
+			return "", errors.New("probe_timeout_sec must be between 1 and 120")
+		}
+		b, _ := json.Marshal(map[string]int{"probe_timeout_sec": probeTimeout})
+		return string(b), nil
+
+	case "dropbox_token_refresh":
+		return "{}", nil
+
+	default:
+		if len(incoming) == 0 {
+			return "{}", nil
+		}
+		return string(incoming), nil
+	}
+}
 
 // Engine wraps robfig/cron and executes built-in maintenance jobs.
 type Engine struct {
@@ -64,9 +183,7 @@ func (e *Engine) SetMigrationBackupDeps(cipher *crypto.Cipher, migSvc *migration
 
 func (e *Engine) Start() error {
 	e.mu.Lock()
-	e.c = cron.New(cron.WithParser(cron.NewParser(
-		cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
-	)))
+	e.c = cron.New(cron.WithParser(cronParser))
 	e.c.Start()
 	e.mu.Unlock()
 
@@ -85,8 +202,7 @@ func (e *Engine) Stop() {
 
 // ValidateCron validates a standard 5-field cron expression or descriptor.
 func ValidateCron(expr string) error {
-	p := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
-	_, err := p.Parse(strings.TrimSpace(expr))
+	_, err := PreviewCron(expr, 1)
 	return err
 }
 
@@ -133,12 +249,10 @@ func (e *Engine) ReloadAll(ctx context.Context) error {
 
 // RunNow triggers a cron job immediately detached from HTTP request cancellation.
 func (e *Engine) RunNow(_ context.Context, jobID, actorName string) (*db.CronJobRun, error) {
-	runCtx, cancel := context.WithTimeout(e.appCtx, 5*time.Minute)
-	defer cancel()
-	if _, err := e.store.GetCronJobByID(runCtx, jobID); err != nil {
+	if _, err := e.store.GetCronJobByID(e.appCtx, jobID); err != nil {
 		return nil, err
 	}
-	run := e.executeJob(runCtx, jobID, "manual", actorName)
+	run := e.executeJob(e.appCtx, jobID, "manual", actorName)
 	return run, nil
 }
 
@@ -146,12 +260,19 @@ func (e *Engine) executeJob(ctx context.Context, jobID, triggerType, triggeredBy
 	e.mu.Lock()
 	if e.running[jobID] {
 		e.mu.Unlock()
-		return &db.CronJobRun{
-			JobID:     jobID,
-			Status:    "failed",
-			OutputLog: "job is already running",
-			StartedAt: time.Now().UTC(),
+		now := time.Now().UTC()
+		run := &db.CronJobRun{
+			ID:          crypto.NewULID(),
+			JobID:       jobID,
+			TriggerType: triggerType,
+			TriggeredBy: triggeredBy,
+			Status:      "skipped",
+			OutputLog:   "上一次执行尚未结束，跳过本次",
+			StartedAt:   now,
+			FinishedAt:  &now,
 		}
+		_ = e.store.InsertCronJobRun(ctx, run)
+		return run
 	}
 	e.running[jobID] = true
 	e.mu.Unlock()
@@ -166,6 +287,13 @@ func (e *Engine) executeJob(ctx context.Context, jobID, triggerType, triggeredBy
 		return &db.CronJobRun{JobID: jobID, Status: "failed", OutputLog: err.Error(), StartedAt: time.Now().UTC()}
 	}
 
+	timeoutSec := job.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = DefaultTimeoutFor(job.JobKey)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+
 	start := time.Now().UTC()
 	run := &db.CronJobRun{
 		ID:          crypto.NewULID(),
@@ -177,13 +305,16 @@ func (e *Engine) executeJob(ctx context.Context, jobID, triggerType, triggeredBy
 	}
 	_ = e.store.InsertCronJobRun(ctx, run)
 
-	affected, summary, execErr := e.dispatchJob(ctx, job)
+	affected, summary, execErr := e.dispatchJob(runCtx, job)
 	fin := time.Now().UTC()
 	durationMs := fin.Sub(start).Milliseconds()
 
 	status := "succeeded"
 	if execErr != nil {
 		status = "failed"
+		if errors.Is(execErr, context.DeadlineExceeded) || runCtx.Err() == context.DeadlineExceeded {
+			status = "timeout"
+		}
 		if summary == "" {
 			summary = execErr.Error()
 		} else {
@@ -195,7 +326,9 @@ func (e *Engine) executeJob(ctx context.Context, jobID, triggerType, triggeredBy
 	run.AffectedRows = affected
 	run.OutputLog = summary
 	run.FinishedAt = &fin
-	_ = e.store.FinishCronJobRun(ctx, run.ID, status, affected, summary, fin)
+	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelFinish()
+	_ = e.store.FinishCronJobRun(finishCtx, run.ID, status, affected, summary, fin)
 
 	var nextRun *time.Time
 	e.mu.Lock()
@@ -210,14 +343,14 @@ func (e *Engine) executeJob(ctx context.Context, jobID, triggerType, triggeredBy
 	}
 	e.mu.Unlock()
 
-	_ = e.store.UpdateCronJobExecution(ctx, job.ID, status, summary, durationMs, start, nextRun)
+	_ = e.store.UpdateCronJobExecution(finishCtx, job.ID, status, summary, durationMs, start, nextRun)
 
 	if e.auditLog != nil {
 		actorType := "system"
 		if triggerType == "manual" {
 			actorType = "admin"
 		}
-		e.auditLog.Record(ctx, audit.Event{
+		e.auditLog.Record(finishCtx, audit.Event{
 			ActorType:    actorType,
 			ActorID:      triggeredBy,
 			ActorName:    triggeredBy,
@@ -327,6 +460,13 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 		return total, fmt.Sprintf("removed %d orphan .spool files and %d expired failed-task spools", removed, failedRemoved), nil
 
 	case "upstream_health_check":
+		probeTimeoutSec := intFromMap(cfg, "probe_timeout_sec", 20)
+		if probeTimeoutSec < 1 {
+			probeTimeoutSec = 1
+		}
+		if probeTimeoutSec > 120 {
+			probeTimeoutSec = 120
+		}
 		ups, err := e.store.ListUpstreams(ctx)
 		if err != nil {
 			return 0, "", err
@@ -339,7 +479,7 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 			checked++
 			p, err := e.registry.BuildFromUpstream(ctx, &u)
 			if err == nil {
-				tCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				tCtx, cancel := context.WithTimeout(ctx, time.Duration(probeTimeoutSec)*time.Second)
 				err = p.TestConnection(tCtx)
 				cancel()
 			}

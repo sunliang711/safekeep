@@ -208,6 +208,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			description TEXT NOT NULL DEFAULT '',
 			cron_expr TEXT NOT NULL,
 			enabled INTEGER NOT NULL DEFAULT 1,
+			timeout_sec INTEGER NOT NULL DEFAULT 300,
 			config_json TEXT NOT NULL DEFAULT '{}',
 			last_run_at DATETIME,
 			last_status TEXT NOT NULL DEFAULT 'never',
@@ -248,6 +249,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if err := s.ensureColumn(ctx, "backup_tasks", "remote_filename", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensure backup_tasks.remote_filename: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "cron_jobs", "timeout_sec", "INTEGER NOT NULL DEFAULT 300"); err != nil {
+		return fmt.Errorf("ensure cron_jobs.timeout_sec: %w", err)
 	}
 	return nil
 }
@@ -323,63 +327,69 @@ func (s *Store) seedDefaults(ctx context.Context, defaults config.SystemSettings
 
 	defaultJobs := []struct {
 		key, name, desc, expr, cfg string
-		enabled                    int
+		enabled, timeoutSec        int
 	}{
 		{
-			key:     "cleanup_audit_logs",
-			name:    "清理过期审计日志",
-			desc:    "定期删除超过保留天数的历史审计日志，控制数据库体积。",
-			expr:    "0 2 * * *",
-			cfg:     `{"retention_days":90}`,
-			enabled: 1,
+			key:        "cleanup_audit_logs",
+			name:       "清理过期审计日志",
+			desc:       "定期删除超过保留天数的历史审计日志，控制数据库体积。",
+			expr:       "0 2 * * *",
+			cfg:        `{"retention_days":90}`,
+			enabled:    1,
+			timeoutSec: 300,
 		},
 		{
-			key:     "cleanup_task_records",
-			name:    "清理过期任务记录",
-			desc:    "定期清理已完成且临时文件已清除的历史备份任务及定时任务执行历史。",
-			expr:    "0 3 * * *",
-			cfg:     `{"retention_days":180}`,
-			enabled: 1,
+			key:        "cleanup_task_records",
+			name:       "清理过期任务记录",
+			desc:       "定期清理已完成且临时文件已清除的历史备份任务及定时任务执行历史。",
+			expr:       "0 3 * * *",
+			cfg:        `{"retention_days":180}`,
+			enabled:    1,
+			timeoutSec: 300,
 		},
 		{
-			key:     "cleanup_orphan_spool",
-			name:    "清理缓冲盘孤儿文件",
-			desc:    "扫描本地临时缓冲目录，清理超时或未被未完结任务引用的残留文件。",
-			expr:    "0 * * * *",
-			cfg:     `{"max_age_hours":24}`,
-			enabled: 1,
+			key:        "cleanup_orphan_spool",
+			name:       "清理缓冲盘孤儿文件",
+			desc:       "扫描本地临时缓冲目录，清理超时或未被未完结任务引用的残留文件。",
+			expr:       "0 * * * *",
+			cfg:        `{"max_age_hours":24,"failed_spool_retention_hours":72}`,
+			enabled:    1,
+			timeoutSec: 300,
 		},
 		{
-			key:     "upstream_health_check",
-			name:    "上游存储与代理健康巡检",
-			desc:    "定期测试所有已启用上游（含 HTTP/SOCKS5 代理）的连通性并刷新状态。",
-			expr:    "*/30 * * * *",
-			cfg:     `{}`,
-			enabled: 1,
+			key:        "upstream_health_check",
+			name:       "上游存储与代理健康巡检",
+			desc:       "定期测试所有已启用上游（含 HTTP/SOCKS5 代理）的连通性并刷新状态。",
+			expr:       "*/30 * * * *",
+			cfg:        `{"probe_timeout_sec":20}`,
+			enabled:    1,
+			timeoutSec: 180,
 		},
 		{
-			key:     "dropbox_token_refresh",
-			name:    "Dropbox OAuth2 Token 预刷新",
-			desc:    "提前刷新即将过期的 Dropbox Access Token，确认 Refresh Token 持续有效。",
-			expr:    "0 */4 * * *",
-			cfg:     `{}`,
-			enabled: 1,
+			key:        "dropbox_token_refresh",
+			name:       "Dropbox OAuth2 Token 预刷新",
+			desc:       "提前刷新即将过期的 Dropbox Access Token，确认 Refresh Token 持续有效。",
+			expr:       "0 */4 * * *",
+			cfg:        `{}`,
+			enabled:    1,
+			timeoutSec: 120,
 		},
 		{
-			key:     "migration_backup",
-			name:    "环境迁移包自动备份",
-			desc:    "定期导出环境迁移包（.skbundle），并通过 SafeKeep HTTP API 备份到远端上游（支持本机或外部 SafeKeep）。",
-			expr:    "0 4 * * *",
-			cfg:     `{"api_base_url":"","client_id":"","targets":"","path":"migration-backups","mode":"sync","rename":"","include_admins":true,"include_tasks":false,"include_audit_logs":false}`,
-			enabled: 0,
+			key:        "migration_backup",
+			name:       "环境迁移包自动备份",
+			desc:       "定期导出环境迁移包（.skbundle），并通过 SafeKeep HTTP API 备份到远端上游（支持本机或外部 SafeKeep）。",
+			expr:       "0 4 * * *",
+			cfg:        `{"api_base_url":"","client_id":"","targets":"","path":"migration-backups","mode":"sync","rename":"","include_admins":true,"include_tasks":false,"include_audit_logs":false}`,
+			enabled:    0,
+			timeoutSec: 300,
 		},
 	}
 
 	for _, j := range defaultJobs {
 		if _, err := s.db.ExecContext(ctx,
-			`INSERT OR IGNORE INTO cron_jobs(id, job_key, name, description, cron_expr, enabled, config_json, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			crypto.NewULID(), j.key, j.name, j.desc, j.expr, j.enabled, j.cfg, now,
+			`INSERT OR IGNORE INTO cron_jobs(id, job_key, name, description, cron_expr, enabled, timeout_sec, config_json, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			crypto.NewULID(), j.key, j.name, j.desc, j.expr, j.enabled, j.timeoutSec, j.cfg, now,
 		); err != nil {
 			return err
 		}

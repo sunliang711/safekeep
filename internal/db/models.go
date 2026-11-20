@@ -123,19 +123,22 @@ type AuditLog struct {
 }
 
 type CronJob struct {
-	ID             string     `json:"id"`
-	JobKey         string     `json:"job_key"`
-	Name           string     `json:"name"`
-	Description    string     `json:"description"`
-	CronExpr       string     `json:"cron_expr"`
-	Enabled        bool       `json:"enabled"`
-	ConfigJSON     string     `json:"config_json"`
-	LastRunAt      *time.Time `json:"last_run_at,omitempty"`
-	LastStatus     string     `json:"last_status"`
-	LastDurationMs int64      `json:"last_duration_ms"`
-	LastSummary    string     `json:"last_summary,omitempty"`
-	NextRunAt      *time.Time `json:"next_run_at,omitempty"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID              string      `json:"id"`
+	JobKey          string      `json:"job_key"`
+	Name            string      `json:"name"`
+	Description     string      `json:"description"`
+	CronExpr        string      `json:"cron_expr"`
+	DefaultSchedule string      `json:"default_schedule,omitempty"`
+	Enabled         bool        `json:"enabled"`
+	TimeoutSec      int         `json:"timeout_sec"`
+	ConfigJSON      string      `json:"config_json"`
+	LastRunAt       *time.Time  `json:"last_run_at,omitempty"`
+	LastStatus      string      `json:"last_status"`
+	LastDurationMs  int64       `json:"last_duration_ms"`
+	LastSummary     string      `json:"last_summary,omitempty"`
+	NextRunAt       *time.Time  `json:"next_run_at,omitempty"`
+	NextRuns        []time.Time `json:"next_runs,omitempty"`
+	UpdatedAt       time.Time   `json:"updated_at"`
 }
 
 type CronJobRun struct {
@@ -143,7 +146,7 @@ type CronJobRun struct {
 	JobID        string     `json:"job_id"`
 	TriggerType  string     `json:"trigger_type"` // schedule | manual
 	TriggeredBy  string     `json:"triggered_by"`
-	Status       string     `json:"status"` // running | succeeded | failed
+	Status       string     `json:"status"` // running | succeeded | failed | skipped | timeout
 	AffectedRows int64      `json:"affected_rows"`
 	OutputLog    string     `json:"output_log"`
 	StartedAt    time.Time  `json:"started_at"`

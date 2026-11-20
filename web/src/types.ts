@@ -106,13 +106,16 @@ export interface CronJob {
   name: string;
   description: string;
   cron_expr: string;
+  default_schedule?: string;
   enabled: boolean;
+  timeout_sec: number;
   config_json: string;
   last_run_at?: string;
   last_status: string;
   last_duration_ms: number;
   last_summary?: string;
   next_run_at?: string;
+  next_runs?: string[];
   updated_at: string;
 }
 
@@ -121,7 +124,7 @@ export interface CronJobRun {
   job_id: string;
   trigger_type: 'schedule' | 'manual';
   triggered_by: string;
-  status: 'running' | 'succeeded' | 'failed';
+  status: 'running' | 'succeeded' | 'failed' | 'skipped' | 'timeout';
   affected_rows: number;
   output_log: string;
   started_at: string;

@@ -123,9 +123,14 @@ export const api = {
   },
 
   listCronJobs: () => req<{ items: CronJob[] }>('/admin/api/v1/cron-jobs'),
+  previewCronSchedule: (schedule: string) =>
+    req<{ next_runs: string[] }>('/admin/api/v1/cron-jobs/preview', {
+      method: 'POST',
+      body: JSON.stringify({ schedule }),
+    }),
   revealCronSecrets: (id: string) =>
     req<{ api_key?: string; passphrase?: string }>(`/admin/api/v1/cron-jobs/${id}/secrets`),
-  updateCronJob: (id: string, payload: { cron_expr: string; enabled: boolean; config: any }) =>
+  updateCronJob: (id: string, payload: { cron_expr: string; enabled: boolean; timeout_sec?: number; config?: any }) =>
     req<CronJob>(`/admin/api/v1/cron-jobs/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   runCronJob: (id: string) => req<CronJobRun>(`/admin/api/v1/cron-jobs/${id}/run`, { method: 'POST' }),
   listCronRuns: (id: string) => req<{ items: CronJobRun[] }>(`/admin/api/v1/cron-jobs/${id}/runs`),

@@ -149,10 +149,40 @@ func (s *Server) handleAdminDownloadTask(w http.ResponseWriter, r *http.Request)
 // --- Cron Jobs ---
 
 func sanitizeCronJobDTO(j db.CronJob) db.CronJob {
+	j.DefaultSchedule = scheduler.DefaultScheduleFor(j.JobKey)
+	if j.TimeoutSec <= 0 {
+		j.TimeoutSec = scheduler.DefaultTimeoutFor(j.JobKey)
+	}
+	if next, err := scheduler.PreviewCron(j.CronExpr, 5); err == nil {
+		j.NextRuns = next
+	} else {
+		j.NextRuns = []time.Time{}
+	}
 	if j.JobKey == "migration_backup" {
 		j.ConfigJSON = scheduler.SanitizeMigrationBackupConfigJSON(j.ConfigJSON)
 	}
 	return j
+}
+
+func (s *Server) handlePreviewCronSchedule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Schedule string `json:"schedule"`
+		CronExpr string `json:"cron_expr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	expr := strings.TrimSpace(req.Schedule)
+	if expr == "" {
+		expr = strings.TrimSpace(req.CronExpr)
+	}
+	times, err := scheduler.PreviewCron(expr, 5)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_cron", fmt.Sprintf("cron 表达式无效：%v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"next_runs": times})
 }
 
 func (s *Server) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
@@ -218,9 +248,10 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		CronExpr string          `json:"cron_expr"`
-		Enabled  bool            `json:"enabled"`
-		Config   json.RawMessage `json:"config"`
+		CronExpr   string          `json:"cron_expr"`
+		Enabled    bool            `json:"enabled"`
+		TimeoutSec *int            `json:"timeout_sec"`
+		Config     json.RawMessage `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
@@ -230,17 +261,36 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_cron", fmt.Sprintf("invalid cron expression: %v", err))
 		return
 	}
-	cfgStr := "{}"
-	if existing.JobKey == "migration_backup" {
-		cfgStr, err = scheduler.MergeMigrationBackupConfig(s.cipher, existing.ConfigJSON, req.Config)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+	timeoutSec := existing.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = scheduler.DefaultTimeoutFor(existing.JobKey)
+	}
+	if req.TimeoutSec != nil {
+		if *req.TimeoutSec < 1 || *req.TimeoutSec > 86400 {
+			writeError(w, http.StatusBadRequest, "invalid_timeout", "timeout_sec must be between 1 and 86400 seconds")
 			return
 		}
-	} else if len(req.Config) > 0 && json.Valid(req.Config) {
-		cfgStr = string(req.Config)
+		timeoutSec = *req.TimeoutSec
 	}
-	if err := s.store.UpdateCronJob(r.Context(), id, strings.TrimSpace(req.CronExpr), req.Enabled, cfgStr); err != nil {
+
+	rawCfg := strings.TrimSpace(string(req.Config))
+	cfgStr := existing.ConfigJSON
+	if rawCfg != "" && rawCfg != "null" {
+		if existing.JobKey == "migration_backup" {
+			cfgStr, err = scheduler.MergeMigrationBackupConfig(s.cipher, existing.ConfigJSON, req.Config)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+				return
+			}
+		} else {
+			cfgStr, err = scheduler.NormalizeJobConfig(existing.JobKey, req.Config)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+				return
+			}
+		}
+	}
+	if err := s.store.UpdateCronJobWithTimeout(r.Context(), id, strings.TrimSpace(req.CronExpr), req.Enabled, timeoutSec, cfgStr); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "cron job not found")
 			return
@@ -262,7 +312,7 @@ func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
-		Detail:       map[string]any{"job_key": existing.JobKey, "cron_expr": req.CronExpr, "enabled": req.Enabled},
+		Detail:       map[string]any{"job_key": existing.JobKey, "cron_expr": strings.TrimSpace(req.CronExpr), "enabled": req.Enabled, "timeout_sec": timeoutSec},
 	})
 	job, _ := s.store.GetCronJobByID(r.Context(), id)
 	if job == nil {

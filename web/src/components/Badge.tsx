@@ -8,6 +8,8 @@ const styles: Record<string, string> = {
   running: 'bg-blue-50 text-blue-700 border-blue-200',
   pending: 'bg-amber-50 text-amber-700 border-amber-200',
   partial_success: 'bg-amber-50 text-amber-700 border-amber-200',
+  timeout: 'bg-amber-50 text-amber-700 border-amber-200',
+  skipped: 'bg-slate-100 text-slate-600 border-slate-200',
   untested: 'bg-slate-100 text-slate-600 border-slate-200',
   never: 'bg-slate-100 text-slate-600 border-slate-200',
   disabled: 'bg-slate-100 text-slate-500 border-slate-200',
@@ -18,8 +20,8 @@ const styles: Record<string, string> = {
 }
 
 const labels: Record<string, string> = {
-  succeeded: '已完成', ok: '正常', success: '成功', enabled: '已启用', running: '进行中',
-  pending: '待处理', partial_success: '部分成功', untested: '未测试', never: '未执行',
+  succeeded: '成功', ok: '正常', success: '成功', enabled: '已启用', running: '执行中',
+  pending: '待处理', partial_success: '部分成功', timeout: '超时', skipped: '跳过', untested: '未测试', never: '未执行',
   disabled: '已禁用', failed: '失败', failure: '失败', sync: '同步', async: '异步',
 }
 

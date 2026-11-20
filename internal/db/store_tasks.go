@@ -608,7 +608,7 @@ func (s *Store) DeleteCompletedTasksBefore(ctx context.Context, cutoff time.Time
 
 func (s *Store) ListCronJobs(ctx context.Context) ([]CronJob, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_key, name, description, cron_expr, enabled, config_json,
+		`SELECT id, job_key, name, description, cron_expr, enabled, timeout_sec, config_json,
 			last_run_at, last_status, last_duration_ms, last_summary, next_run_at, updated_at
 		 FROM cron_jobs ORDER BY job_key ASC`)
 	if err != nil {
@@ -629,7 +629,7 @@ func (s *Store) ListCronJobs(ctx context.Context) ([]CronJob, error) {
 
 func (s *Store) GetCronJobByID(ctx context.Context, id string) (*CronJob, error) {
 	return scanCronJob(s.db.QueryRowContext(ctx,
-		`SELECT id, job_key, name, description, cron_expr, enabled, config_json,
+		`SELECT id, job_key, name, description, cron_expr, enabled, timeout_sec, config_json,
 			last_run_at, last_status, last_duration_ms, last_summary, next_run_at, updated_at
 		 FROM cron_jobs WHERE id = ?`, id))
 }
@@ -638,6 +638,21 @@ func (s *Store) UpdateCronJob(ctx context.Context, id, cronExpr string, enabled 
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE cron_jobs SET cron_expr = ?, enabled = ?, config_json = ?, updated_at = ? WHERE id = ?`,
 		cronExpr, boolToInt(enabled), configJSON, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) UpdateCronJobWithTimeout(ctx context.Context, id, cronExpr string, enabled bool, timeoutSec int, configJSON string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE cron_jobs SET cron_expr = ?, enabled = ?, timeout_sec = ?, config_json = ?, updated_at = ? WHERE id = ?`,
+		cronExpr, boolToInt(enabled), timeoutSec, configJSON, time.Now().UTC(), id,
 	)
 	if err != nil {
 		return err
@@ -712,7 +727,7 @@ func scanCronJob(row rowScanner) (*CronJob, error) {
 	var enabled int
 	var lastRun, nextRun sql.NullTime
 	if err := row.Scan(
-		&j.ID, &j.JobKey, &j.Name, &j.Description, &j.CronExpr, &enabled, &j.ConfigJSON,
+		&j.ID, &j.JobKey, &j.Name, &j.Description, &j.CronExpr, &enabled, &j.TimeoutSec, &j.ConfigJSON,
 		&lastRun, &j.LastStatus, &j.LastDurationMs, &j.LastSummary, &nextRun, &j.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -721,6 +736,9 @@ func scanCronJob(row rowScanner) (*CronJob, error) {
 		return nil, err
 	}
 	j.Enabled = enabled == 1
+	if j.TimeoutSec <= 0 {
+		j.TimeoutSec = 300
+	}
 	if lastRun.Valid {
 		v := lastRun.Time
 		j.LastRunAt = &v
