@@ -31,13 +31,13 @@ func (s *Store) CreateBackupTask(ctx context.Context, t *BackupTask, items []Bac
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO backup_tasks(
 			id, client_id, idempotency_key, mode, status,
-			original_filename, content_type, file_size, sha256,
+			original_filename, remote_filename, content_type, file_size, sha256,
 			spool_path, spool_cleaned, custom_subpath, metadata_json,
 			deduplicated, webhook_status, error_summary,
 			created_at, started_at, finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.ClientID, t.IdempotencyKey, t.Mode, t.Status,
-		t.OriginalFilename, t.ContentType, t.FileSize, t.SHA256,
+		t.OriginalFilename, t.RemoteFilename, t.ContentType, t.FileSize, t.SHA256,
 		t.SpoolPath, boolToInt(t.SpoolCleaned), t.CustomSubpath, t.MetadataJSON,
 		boolToInt(t.Deduplicated), t.WebhookStatus, t.ErrorSummary,
 		t.CreatedAt, t.StartedAt, t.FinishedAt,
@@ -118,7 +118,7 @@ func (s *Store) FindSucceededItemsByHash(ctx context.Context, clientID, sha256He
 func (s *Store) GetBackupTask(ctx context.Context, id string) (*BackupTask, error) {
 	t, err := scanBackupTask(s.db.QueryRowContext(ctx,
 		`SELECT t.id, t.client_id, COALESCE(c.name, ''), t.idempotency_key, t.mode, t.status,
-			t.original_filename, t.content_type, t.file_size, t.sha256,
+			t.original_filename, t.remote_filename, t.content_type, t.file_size, t.sha256,
 			t.spool_path, t.spool_cleaned, t.custom_subpath, t.metadata_json,
 			t.deduplicated, t.webhook_status, t.error_summary,
 			t.created_at, t.started_at, t.finished_at
@@ -188,8 +188,8 @@ func (s *Store) ListBackupTasks(ctx context.Context, f TaskFilter) ([]BackupTask
 	}
 	if f.Query != "" {
 		q := "%" + f.Query + "%"
-		where = append(where, "(t.original_filename LIKE ? OR t.sha256 LIKE ? OR t.id LIKE ?)")
-		args = append(args, q, q, q)
+		where = append(where, "(t.original_filename LIKE ? OR t.remote_filename LIKE ? OR t.sha256 LIKE ? OR t.id LIKE ?)")
+		args = append(args, q, q, q, q)
 	}
 	clause := strings.Join(where, " AND ")
 
@@ -201,7 +201,7 @@ func (s *Store) ListBackupTasks(ctx context.Context, f TaskFilter) ([]BackupTask
 	queryArgs := append(append([]any{}, args...), f.Limit, f.Offset)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, t.client_id, COALESCE(c.name, ''), t.idempotency_key, t.mode, t.status,
-			t.original_filename, t.content_type, t.file_size, t.sha256,
+			t.original_filename, t.remote_filename, t.content_type, t.file_size, t.sha256,
 			t.spool_path, t.spool_cleaned, t.custom_subpath, t.metadata_json,
 			t.deduplicated, t.webhook_status, t.error_summary,
 			t.created_at, t.started_at, t.finished_at
@@ -257,11 +257,11 @@ func (s *Store) UpdateTaskWebhookStatus(ctx context.Context, id, status string) 
 func (s *Store) UpdateTaskItemResult(ctx context.Context, it *BackupTaskItem) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE backup_task_items SET
-			status = ?, attempt_count = ?, next_retry_at = ?, duration_ms = ?,
+			remote_path = ?, status = ?, attempt_count = ?, next_retry_at = ?, duration_ms = ?,
 			remote_etag = ?, remote_version_id = ?, error_message = ?,
 			started_at = ?, finished_at = ?
 		 WHERE id = ?`,
-		it.Status, it.AttemptCount, it.NextRetryAt, it.DurationMs,
+		it.RemotePath, it.Status, it.AttemptCount, it.NextRetryAt, it.DurationMs,
 		it.RemoteETag, it.RemoteVersionID, it.ErrorMessage,
 		it.StartedAt, it.FinishedAt, it.ID,
 	)
@@ -432,7 +432,7 @@ func scanBackupTask(row rowScanner) (*BackupTask, error) {
 	var startedAt, finishedAt sql.NullTime
 	if err := row.Scan(
 		&t.ID, &t.ClientID, &t.ClientName, &t.IdempotencyKey, &t.Mode, &t.Status,
-		&t.OriginalFilename, &t.ContentType, &t.FileSize, &t.SHA256,
+		&t.OriginalFilename, &t.RemoteFilename, &t.ContentType, &t.FileSize, &t.SHA256,
 		&t.SpoolPath, &cleaned, &t.CustomSubpath, &t.MetadataJSON,
 		&dedup, &t.WebhookStatus, &t.ErrorSummary,
 		&t.CreatedAt, &startedAt, &finishedAt,

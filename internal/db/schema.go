@@ -141,6 +141,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			mode TEXT NOT NULL,
 			status TEXT NOT NULL,
 			original_filename TEXT NOT NULL,
+			remote_filename TEXT NOT NULL DEFAULT '',
 			content_type TEXT NOT NULL,
 			file_size INTEGER NOT NULL,
 			sha256 TEXT NOT NULL,
@@ -241,7 +242,37 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("exec migration: %w", err)
 		}
 	}
+	if err := s.ensureColumn(ctx, "backup_tasks", "remote_filename", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensure backup_tasks.remote_filename: %w", err)
+	}
 	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, definition))
+	return err
 }
 
 func (s *Store) seedDefaults(ctx context.Context, defaults config.SystemSettings) error {

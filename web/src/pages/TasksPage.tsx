@@ -35,6 +35,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
   const [upClientId, setUpClientId] = useState('')
   const [upMode, setUpMode] = useState<'sync' | 'async'>('sync')
   const [upSubpath, setUpSubpath] = useState('')
+  const [upRename, setUpRename] = useState('')
   const [upTargets, setUpTargets] = useState<string[]>([])
   const [upDedup, setUpDedup] = useState(true)
   const [upMetadata, setUpMetadata] = useState('')
@@ -91,6 +92,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
     setUploadErr('')
     setUploadResult(null)
     setUpFile(null)
+    setUpRename('')
     setUploadMetaLoading(true)
     setUploadOpen(true)
     try {
@@ -197,12 +199,14 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
       dedup: upDedup ? 'true' : 'false',
     }
     if (upSubpath.trim()) query.path = upSubpath.trim()
+    if (upRename.trim()) query.rename = upRename.trim()
     if (upTargets.length > 0) query.targets = upTargets.join(',')
 
     try {
       const res = await api.adminUploadBackup(upClientId, fd, query)
       setUploadResult({ task: res.task, timedOut: res.timed_out_to_async })
       setUpFile(null)
+      setUpRename('')
       setFileInputKey((k) => k + 1)
       await load(0)
       setOffset(0)
@@ -386,6 +390,14 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
             <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-lg">
               <div>Task ID: <span className="font-mono">{selected.id}</span></div>
               <div>文件大小: {formatBytes(selected.file_size)}</div>
+              <div className="break-all">原文件名: <span className="font-mono">{selected.original_filename}</span></div>
+              <div className="break-all">
+                存储文件名:{' '}
+                <span className="font-mono">{selected.remote_filename || selected.original_filename}</span>
+                {selected.remote_filename && selected.remote_filename !== selected.original_filename && (
+                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded">已重命名</span>
+                )}
+              </div>
               <div className="col-span-2 break-all">SHA-256: <span className="font-mono">{selected.sha256}</span></div>
               <div>Webhook 状态: {{ none: '未配置', pending: '待发送', sent: '已发送', failed: '发送失败' }[selected.webhook_status] || selected.webhook_status}</div>
               <div>临时缓冲已清理: {selected.spool_cleaned ? '是' : '否'}</div>
@@ -556,7 +568,17 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                     <label htmlFor="tasks-field-3" className="block text-xs text-slate-600 mb-1">相对子目录（可选）</label>
                     <input id="tasks-field-3" value={upSubpath} onChange={(e) => setUpSubpath(e.target.value)} placeholder="2026/11" className="w-full px-3 py-1.5 border rounded-lg" />
                   </div>
-                  <div className="flex items-end pb-1.5">
+                  <div>
+                    <label htmlFor="tasks-field-rename" className="block text-xs text-slate-600 mb-1">重命名文件名（可选）</label>
+                    <input
+                      id="tasks-field-rename"
+                      value={upRename}
+                      onChange={(e) => setUpRename(e.target.value)}
+                      placeholder="留空则使用原文件名"
+                      className="w-full px-3 py-1.5 border rounded-lg"
+                    />
+                  </div>
+                  <div className="md:col-span-2 flex items-center pt-0.5">
                     <label className="inline-flex items-center gap-2 text-xs text-slate-700">
                       <input type="checkbox" checked={upDedup} onChange={(e) => setUpDedup(e.target.checked)} />
                       <span>启用 SHA-256 秒传去重</span>
@@ -668,6 +690,13 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                       </div>
                       <StatusBadge value={uploadResult.task.status} />
                     </div>
+                    {uploadResult.task.remote_filename && uploadResult.task.remote_filename !== uploadResult.task.original_filename && (
+                      <div className="text-[11px] text-slate-600">
+                        原文件名: <span className="font-mono">{uploadResult.task.original_filename}</span>
+                        {' → '}
+                        新文件名: <span className="font-mono font-semibold text-slate-800">{uploadResult.task.remote_filename}</span>
+                      </div>
+                    )}
                     <div className="space-y-1">
                       {(uploadResult.task.items || []).map((it) => (
                         <div key={it.id} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded border">

@@ -267,7 +267,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			if s.isAllowedOrigin(r, origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Idempotency-Key, X-File-Name, X-Content-SHA256, X-Backup-Mode, X-Backup-Targets, X-Backup-Path, X-Skip-Dedup")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Idempotency-Key, X-File-Name, X-Content-SHA256, X-Backup-Mode, X-Backup-Targets, X-Backup-Path, X-Backup-Rename, X-Skip-Dedup")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			}
 		}

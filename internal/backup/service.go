@@ -47,6 +47,7 @@ func (e *HTTPError) Error() string {
 type UploadRequest struct {
 	Client           *db.Client
 	Filename         string
+	Rename           string
 	ContentType      string
 	Body             io.Reader
 	PreSpooledPath   string
@@ -404,6 +405,14 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		clientPrefix = ""
 	}
 	safeName := sanitizeFilename(req.Filename)
+	remoteFilename, err := sanitizeRename(req.Rename)
+	if err != nil {
+		cleanupPreSpool()
+		return nil, err
+	}
+	if remoteFilename == "" {
+		remoteFilename = safeName
+	}
 	taskID := crypto.NewULID()
 
 	spoolPath := req.PreSpooledPath
@@ -453,7 +462,7 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 	items := make([]db.BackupTaskItem, 0, len(targets))
 	allDeduped := true
 	for _, target := range targets {
-		remotePath := buildRemotePath(clientPrefix, subpath, taskID, safeName, now)
+		remotePath := buildRemotePath(clientPrefix, subpath, remoteFilename)
 		if matched, ok := matchedByUpstream[target.UpstreamID]; ok {
 			fin := now
 			items = append(items, db.BackupTaskItem{
@@ -500,6 +509,7 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 		Mode:             mode,
 		Status:           "pending",
 		OriginalFilename: safeName,
+		RemoteFilename:   remoteFilename,
 		ContentType:      contentType,
 		FileSize:         written,
 		SHA256:           shaHex,
@@ -1062,10 +1072,10 @@ func sanitizeSubpath(raw string) (string, error) {
 	return path.Join(safe...), nil
 }
 
-func sanitizeFilename(name string) string {
+func sanitizeFilenameParts(name string) (string, bool) {
 	base := filepath.Base(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
 	if base == "" || base == "." || base == "/" || base == ".." {
-		return "file.bin"
+		return "", false
 	}
 	var b strings.Builder
 	for _, r := range base {
@@ -1076,14 +1086,35 @@ func sanitizeFilename(name string) string {
 		}
 	}
 	res := strings.TrimSpace(b.String())
-	if res == "" {
-		return "file.bin"
+	if res == "" || res == "." || res == ".." {
+		return "", false
 	}
-	return res
+	return res, true
 }
 
-func buildRemotePath(clientPrefix, subpath, taskID, filename string, now time.Time) string {
-	uniqueName := fmt.Sprintf("%s_%s_%s", now.UTC().Format("20060102T150405Z"), taskID, filename)
+func sanitizeFilename(name string) string {
+	if res, ok := sanitizeFilenameParts(name); ok {
+		return res
+	}
+	return "file.bin"
+}
+
+func sanitizeRename(name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", nil
+	}
+	res, ok := sanitizeFilenameParts(name)
+	if !ok {
+		return "", &HTTPError{
+			Status:  http.StatusBadRequest,
+			Code:    "invalid_filename",
+			Message: "rename filename is invalid",
+		}
+	}
+	return res, nil
+}
+
+func buildRemotePath(clientPrefix, subpath, filename string) string {
 	var parts []string
 	if cp := strings.Trim(strings.ReplaceAll(clientPrefix, "\\", "/"), "/"); cp != "" {
 		parts = append(parts, cp)
@@ -1091,6 +1122,6 @@ func buildRemotePath(clientPrefix, subpath, taskID, filename string, now time.Ti
 	if subpath != "" {
 		parts = append(parts, subpath)
 	}
-	parts = append(parts, uniqueName)
+	parts = append(parts, filename)
 	return path.Join(parts...)
 }

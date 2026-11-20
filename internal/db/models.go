@@ -69,6 +69,7 @@ type BackupTask struct {
 	Mode             string           `json:"mode"`   // sync | async
 	Status           string           `json:"status"` // pending | running | partial_success | succeeded | failed
 	OriginalFilename string           `json:"original_filename"`
+	RemoteFilename   string           `json:"remote_filename,omitempty"`
 	ContentType      string           `json:"content_type"`
 	FileSize         int64            `json:"file_size"`
 	SHA256           string           `json:"sha256"`

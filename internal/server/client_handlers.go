@@ -52,6 +52,7 @@ func (s *Server) executeUploadRequest(w http.ResponseWriter, r *http.Request, cl
 	mode := firstNonEmpty(q.Get("mode"), r.Header.Get("X-Backup-Mode"))
 	targetsRaw := firstNonEmpty(q.Get("targets"), r.Header.Get("X-Backup-Targets"))
 	subpath := firstNonEmpty(q.Get("path"), r.Header.Get("X-Backup-Path"))
+	rename := firstNonEmpty(q.Get("rename"), r.Header.Get("X-Backup-Rename"))
 	expectedSHA := r.Header.Get("X-Content-SHA256")
 	idempKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	skipDedup := strings.EqualFold(firstNonEmpty(q.Get("dedup"), r.Header.Get("X-Skip-Dedup")), "false") ||
@@ -99,6 +100,12 @@ func (s *Server) executeUploadRequest(w http.ResponseWriter, r *http.Request, cl
 				if subpath == "" {
 					b, _ := io.ReadAll(io.LimitReader(part, 1024))
 					subpath = strings.TrimSpace(string(b))
+				}
+				_ = part.Close()
+			case "rename":
+				if rename == "" {
+					b, _ := io.ReadAll(io.LimitReader(part, 512))
+					rename = strings.TrimSpace(string(b))
 				}
 				_ = part.Close()
 			case "metadata":
@@ -162,6 +169,7 @@ func (s *Server) executeUploadRequest(w http.ResponseWriter, r *http.Request, cl
 	res, err := s.backupSvc.HandleUpload(r.Context(), backup.UploadRequest{
 		Client:           client,
 		Filename:         filename,
+		Rename:           rename,
 		ContentType:      contentType,
 		Body:             body,
 		PreSpooledPath:   preSpooledPath,
@@ -214,6 +222,7 @@ func (s *Server) executeUploadRequest(w http.ResponseWriter, r *http.Request, cl
 			"client_id":         client.ID,
 			"client_name":       client.Name,
 			"filename":          res.Task.OriginalFilename,
+			"remote_filename":   res.Task.RemoteFilename,
 			"file_size":         res.Task.FileSize,
 			"sha256":            res.Task.SHA256,
 			"mode":              res.Task.Mode,

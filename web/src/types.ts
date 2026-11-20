@@ -83,6 +83,7 @@ export interface BackupTask {
   mode: 'sync' | 'async';
   status: 'pending' | 'running' | 'partial_success' | 'succeeded' | 'failed';
   original_filename: string;
+  remote_filename?: string;
   content_type: string;
   file_size: number;
   sha256: string;

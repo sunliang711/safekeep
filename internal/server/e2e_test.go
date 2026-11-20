@@ -351,6 +351,21 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	if upResp.StatusCode != http.StatusOK || upRes.Task.Status != "succeeded" {
 		t.Fatalf("expected 200 succeeded, got %d %+v", upResp.StatusCode, upRes.Task)
 	}
+	if upRes.Task.OriginalFilename != "report.txt" || upRes.Task.RemoteFilename != "report.txt" {
+		t.Fatalf("expected original & remote filename 'report.txt', got orig=%q remote=%q", upRes.Task.OriginalFilename, upRes.Task.RemoteFilename)
+	}
+	s3Mu.Lock()
+	_, s3HasOriginal := s3Objects["tenant-a/reports/report.txt"]
+	s3Mu.Unlock()
+	if !s3HasOriginal {
+		t.Fatalf("expected s3 key 'tenant-a/reports/report.txt', got %v", s3Objects)
+	}
+	dbxMu.Lock()
+	_, dbxHasOriginal := dbxFiles["/safekeep/tenant-a/reports/report.txt"]
+	dbxMu.Unlock()
+	if !dbxHasOriginal {
+		t.Fatalf("expected dropbox path '/safekeep/tenant-a/reports/report.txt', got %v", dbxFiles)
+	}
 	if s3UploadCount.Load() != 1 || dbxUploadCount.Load() != 1 {
 		t.Fatalf("expected 1 upload to each upstream, got s3=%d dbx=%d", s3UploadCount.Load(), dbxUploadCount.Load())
 	}
@@ -378,6 +393,17 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	dlResp.Body.Close()
 	if dlResp.StatusCode != http.StatusOK || !bytes.Equal(dlBytes, payload) {
 		t.Fatalf("download mismatch: status=%d body=%q", dlResp.StatusCode, dlBytes)
+	}
+	dbxDlReq, _ := http.NewRequest(http.MethodGet, env.srv.URL+"/api/v1/backups/"+upRes.Task.ID+"/download?upstream_id="+upDbx.ID, nil)
+	dbxDlReq.Header.Set("X-API-Key", clOut.APIKey)
+	dbxDlResp, err := http.DefaultClient.Do(dbxDlReq)
+	if err != nil {
+		t.Fatalf("dropbox download error: %v", err)
+	}
+	dbxDlBytes, _ := io.ReadAll(dbxDlResp.Body)
+	dbxDlResp.Body.Close()
+	if dbxDlResp.StatusCode != http.StatusOK || !bytes.Equal(dbxDlBytes, payload) {
+		t.Fatalf("dropbox download mismatch: status=%d body=%q", dbxDlResp.StatusCode, dbxDlBytes)
 	}
 
 	// 8. Sync timeout fallback to background async
@@ -807,13 +833,13 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 		t.Fatalf("expected 200 after circuit breaker reset, got %d", okAfterReset.StatusCode)
 	}
 
-	// 15. Admin Web upload endpoint (/admin/api/v1/backups/upload) mirrors client API behavior
+	// 15. Admin Web upload endpoint (/admin/api/v1/backups/upload) with rename parameter
 	var webBuf bytes.Buffer
 	wmw := multipart.NewWriter(&webBuf)
 	wfw, _ := wmw.CreateFormFile("file", "web-upload.txt")
 	_, _ = wfw.Write([]byte("hello from web ui"))
 	_ = wmw.Close()
-	webReq, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/admin/api/v1/backups/upload?client_id="+clOut.Client.ID+"&mode=sync&path=web", &webBuf)
+	webReq, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/admin/api/v1/backups/upload?client_id="+clOut.Client.ID+"&mode=sync&path=web&rename=web-renamed.txt", &webBuf)
 	webReq.Header.Set("Content-Type", wmw.FormDataContentType())
 	for _, c := range env.cookies {
 		webReq.AddCookie(c)
@@ -827,5 +853,50 @@ func TestEndToEndSyncDedupAsyncTimeoutAndMigration(t *testing.T) {
 	webResp.Body.Close()
 	if webResp.StatusCode != http.StatusOK || webOut.Task.Status != "succeeded" || len(webOut.Task.Items) != 2 {
 		t.Fatalf("expected web upload 200 succeeded across 2 upstreams, got %d %+v", webResp.StatusCode, webOut.Task)
+	}
+	if webOut.Task.OriginalFilename != "web-upload.txt" || webOut.Task.RemoteFilename != "web-renamed.txt" {
+		t.Fatalf("expected orig='web-upload.txt' remote='web-renamed.txt', got orig=%q remote=%q", webOut.Task.OriginalFilename, webOut.Task.RemoteFilename)
+	}
+	s3Mu.Lock()
+	_, s3HasRenamed := s3Objects["tenant-a/web/web-renamed.txt"]
+	s3Mu.Unlock()
+	if !s3HasRenamed {
+		t.Fatalf("expected s3 key 'tenant-a/web/web-renamed.txt', got %v", s3Objects)
+	}
+
+	// 16. Raw stream X-Backup-Rename, invalid rename rejection, and search by remote_filename
+	rawReq, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/backups?mode=sync&targets=mock-s3&path=raw", strings.NewReader("raw-stream-renamed-content"))
+	rawReq.Header.Set("X-API-Key", clOut.APIKey)
+	rawReq.Header.Set("X-File-Name", "raw-orig.log")
+	rawReq.Header.Set("X-Backup-Rename", "raw-new.log")
+	rawResp, err := http.DefaultClient.Do(rawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawOut backup.UploadResponse
+	_ = json.NewDecoder(rawResp.Body).Decode(&rawOut)
+	rawResp.Body.Close()
+	if rawResp.StatusCode != http.StatusOK || rawOut.Task.OriginalFilename != "raw-orig.log" || rawOut.Task.RemoteFilename != "raw-new.log" {
+		t.Fatalf("unexpected raw rename result: status=%d task=%+v", rawResp.StatusCode, rawOut.Task)
+	}
+	if len(rawOut.Task.Items) != 1 || rawOut.Task.Items[0].RemotePath != "tenant-a/raw/raw-new.log" {
+		t.Fatalf("unexpected raw rename remote_path: %+v", rawOut.Task.Items)
+	}
+
+	badRenameResp := uploadMultipart(t, env.srv.URL+"/api/v1/backups?mode=sync&rename=..", clOut.APIKey, "bad.txt", []byte("x"))
+	badRenameResp.Body.Close()
+	if badRenameResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid rename '..', got %d", badRenameResp.StatusCode)
+	}
+
+	searchResp := env.adminReq(t, http.MethodGet, "/admin/api/v1/tasks?q=web-renamed.txt", nil)
+	var searchList struct {
+		Total int64           `json:"total"`
+		Items []db.BackupTask `json:"items"`
+	}
+	_ = json.NewDecoder(searchResp.Body).Decode(&searchList)
+	searchResp.Body.Close()
+	if searchResp.StatusCode != http.StatusOK || searchList.Total != 1 || searchList.Items[0].OriginalFilename != "web-upload.txt" {
+		t.Fatalf("expected search by remote_filename to find web-upload.txt, got %+v", searchList)
 	}
 }

@@ -740,13 +740,13 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 			res, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO backup_tasks(
 					id, client_id, idempotency_key, mode, status,
-					original_filename, content_type, file_size, sha256,
+					original_filename, remote_filename, content_type, file_size, sha256,
 					spool_path, spool_cleaned, custom_subpath, metadata_json,
 					deduplicated, webhook_status, error_summary,
 					created_at, started_at, finished_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				t.ID, cID, t.IdempotencyKey, t.Mode, t.Status,
-				t.OriginalFilename, t.ContentType, t.FileSize, t.SHA256,
+				t.OriginalFilename, t.RemoteFilename, t.ContentType, t.FileSize, t.SHA256,
 				t.CustomSubpath, t.MetadataJSON,
 				boolInt(t.Deduplicated), t.WebhookStatus, t.ErrorSummary,
 				t.CreatedAt, t.StartedAt, t.FinishedAt,

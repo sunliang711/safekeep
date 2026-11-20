@@ -228,7 +228,7 @@ export const ClientsPage: React.FC = () => {
             id: 'sync-upload' as const,
             label: '1. 同步上传',
             title: '同步上传（mode=sync，等待结果；超时自动转后台）',
-            desc: '适合中小文件或需要立即确认备份结果的场景；超过系统同步超时时间后自动转为后台异步执行并返回 202。',
+            desc: '适合中小文件或需要立即确认备份结果的场景；默认直接使用原文件名，如需重命名可传 rename=new-name.tar.gz。超过系统同步超时时间后自动转为后台异步执行并返回 202。',
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=daily" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -F "file=@./backup.tar.gz"`,
           },
           {
@@ -242,7 +242,7 @@ export const ClientsPage: React.FC = () => {
             id: 'raw-stream' as const,
             label: '3. 原始二进制流上传',
             title: '原始二进制流上传（非 multipart，通过 Header 指定文件名）',
-            desc: '直接将文件内容作为请求体流式上传，使用 X-File-Name 传递文件名（参数也可用 X-Backup-Mode / X-Backup-Path 请求头）。',
+            desc: '直接将文件内容作为请求体流式上传，使用 X-File-Name 传递原文件名（也可用 X-Backup-Mode / X-Backup-Path / X-Backup-Rename 请求头）。',
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=logs" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -H "X-File-Name: app.log" \\\n  --data-binary @./app.log`,
           },
           {
@@ -287,6 +287,7 @@ export const ClientsPage: React.FC = () => {
                     <code className="px-1 py-0.5 bg-white border rounded font-mono">mode=sync|async</code>（不传时使用客户的“默认传输模式”）、
                     <code className="px-1 py-0.5 bg-white border rounded font-mono">targets</code>（逗号分隔的上游名称或 ID，需在绑定列表内；留空走默认上游组）、
                     <code className="px-1 py-0.5 bg-white border rounded font-mono">path</code>（相对子目录）、
+                    <code className="px-1 py-0.5 bg-white border rounded font-mono">rename</code> / <code className="px-1 py-0.5 bg-white border rounded font-mono">X-Backup-Rename</code>（可选，重命名远端保存文件名；默认使用原文件名）、
                     <code className="px-1 py-0.5 bg-white border rounded font-mono">dedup=false</code>（跳过 SHA-256 秒传去重）。
                   </div>
                 </div>
