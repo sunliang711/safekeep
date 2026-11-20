@@ -60,6 +60,22 @@ make build
 
 启动后访问 `http://localhost:8333` 完成首次管理员初始化。
 
+## Dropbox OAuth2 授权提示（SSH 隧道方案）
+
+Dropbox 的 OAuth2 `Redirect URIs` 仅支持 `https://` 或 `http://localhost`，**不支持非 `localhost` 的 `http://` 地址**（如局域网 IP 或无 HTTPS 的远程服务器 IP）。
+
+如果 SafeKeep 部署在无 HTTPS 域名的内网/远程服务器上，可在本地电脑终端建立一条 SSH 端口转发隧道，临时通过 `localhost` 访问管理端完成一次授权：
+
+```bash
+# 将本地 8333 端口转发到目标服务器的 8333 端口
+ssh -N -L 8333:127.0.0.1:8333 <user>@<server-ip>
+```
+
+然后按以下步骤完成授权：
+1. 在 Dropbox Developer Console → Settings → OAuth 2 → **Redirect URIs** 中添加并保存：`http://localhost:8333/admin/api/v1/oauth/dropbox/callback`
+2. 在本机浏览器打开 `http://localhost:8333`，进入「上游存储与代理」点击 **Web OAuth2 授权**
+3. 授权成功后 Refresh Token 会加密保存在服务端数据库中，之后即可关闭 SSH 隧道，继续通过原地址正常使用。
+
 ## 客户端上传 API 示例
 
 ```bash

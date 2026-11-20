@@ -290,32 +290,80 @@ export const UpstreamsPage: React.FC = () => {
                     <div>授权状态: {u.config.authorized ? <span className="text-emerald-700 font-medium">已授权 ({u.config.account_email || '已连接'})</span> : <span className="text-amber-700">未授权</span>}</div>
                     <div>根目录: <span className="font-mono">{u.config.root_path || '/'}</span></div>
                     {!u.config.authorized ? (
-                      <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 space-y-1">
-                        <div className="font-medium">授权前请先配置 Dropbox 回调地址：</div>
-                        <div className="text-[11px] text-amber-800">
-                          前往 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b>，添加并保存以下地址（非 <code className="font-mono">localhost</code>/<code className="font-mono">127.0.0.1</code> 地址需使用 <code className="font-mono">https://</code>）：
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-amber-200 text-[11px] break-all">
-                            {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await copyText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
-                                toast.success('已复制回调地址，请粘贴并保存到 Dropbox App Console -> OAuth 2 -> Redirect URIs 后再点击授权。')
-                              } catch (e: any) {
-                                toast.error(e.message || '复制失败')
-                              }
-                            }}
-                            className="text-amber-800 hover:text-amber-950 inline-flex items-center gap-0.5 font-medium"
-                            title="复制回调地址"
-                          >
-                            <Copy className="w-3 h-3" /> 复制
-                          </button>
-                        </div>
-                      </div>
+                      (() => {
+                        const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
+                        const host = window.location.hostname
+                        const isLocal = host === 'localhost' || host === '127.0.0.1'
+                        const isNonLocalHTTP = window.location.protocol === 'http:' && !isLocal
+                        const targetHost = isLocal ? '<服务器IP>' : host
+                        const sshCmd = `ssh -N -L ${port}:127.0.0.1:${port} <用户名>@${targetHost}`
+                        const localhostCallback = `http://localhost:${port}/admin/api/v1/oauth/dropbox/callback`
+                        const currentCallback = `${window.location.origin}/admin/api/v1/oauth/dropbox/callback`
+                        const copyTargetCallback = isNonLocalHTTP ? localhostCallback : currentCallback
+
+                        return (
+                          <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
+                            <div className="font-medium">授权前请先配置 Dropbox 回调地址：</div>
+                            <div className="text-[11px] text-amber-800 leading-relaxed">
+                              前往 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b> 添加并保存回调地址。
+                              Dropbox 仅支持 <code className="font-mono">https://</code> 或 <code className="font-mono">http://localhost</code>，<b>不支持非 localhost 的 http://（如局域网/公网 IP）</b>。
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-amber-200 text-[11px] break-all">
+                                {copyTargetCallback}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await copyText(copyTargetCallback)
+                                    toast.success('已复制回调地址，请粘贴并保存到 Dropbox App Console -> OAuth 2 -> Redirect URIs 后再点击授权。')
+                                  } catch (e: any) {
+                                    toast.error(e.message || '复制失败')
+                                  }
+                                }}
+                                className="text-amber-800 hover:text-amber-950 inline-flex items-center gap-0.5 font-medium"
+                                title="复制回调地址"
+                              >
+                                <Copy className="w-3 h-3" /> 复制
+                              </button>
+                            </div>
+                            <div className="pt-1.5 border-t border-amber-200/80 text-[11px] text-amber-900 space-y-1">
+                              <div className="font-medium">
+                                {isNonLocalHTTP
+                                  ? '检测到当前正在通过非 localhost 的 HTTP 访问，建议通过 SSH 隧道映射到本地后授权：'
+                                  : '若在无 HTTPS 域名的远程/局域网服务器部署，可在本地终端建立 SSH 隧道后使用 localhost 授权：'}
+                              </div>
+                              <div className="text-amber-800">
+                                1. 在本机执行端口转发（将本地 <code className="font-mono">localhost:{port}</code> 映射到目标服务器）：
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-amber-200 text-[11px] break-all">
+                                  {sshCmd}
+                                </code>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await copyText(sshCmd)
+                                      toast.success('已复制 SSH 隧道命令（请将 <用户名> 替换为实际 SSH 登录用户）')
+                                    } catch (e: any) {
+                                      toast.error(e.message || '复制失败')
+                                    }
+                                  }}
+                                  className="text-amber-800 hover:text-amber-950 inline-flex items-center gap-0.5 font-medium"
+                                  title="复制 SSH 隧道命令"
+                                >
+                                  <Copy className="w-3 h-3" /> 复制命令
+                                </button>
+                              </div>
+                              <div className="text-amber-800">
+                                2. 在浏览器改用 <code className="font-mono">http://localhost:{port}</code> 打开管理端，将上方回调地址填入 Dropbox Redirect URIs 并完成授权（授权成功后 Refresh Token 会持久化在服务端，之后可关闭隧道恢复原地址访问）。
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })()
                     ) : (
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span>OAuth 回调 URI:</span>
