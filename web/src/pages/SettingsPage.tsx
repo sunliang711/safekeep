@@ -360,33 +360,39 @@ export const SettingsPage: React.FC = () => {
         <p className="text-sm text-slate-500">管理全局运行参数、SMTP 邮件告警服务与管理员账号</p>
       </div>
 
-      <div className="flex flex-col xl:flex-row gap-6 items-start">
-        {/* Left Vertical Tab Navigation */}
-        <aside aria-label="设置分类" className="w-full xl:w-60 shrink-0 bg-white rounded-xl border border-slate-200 p-2 grid grid-cols-3 xl:flex xl:flex-col gap-1">
+      <div className="space-y-5">
+        {/* Top Horizontal Tab Navigation */}
+        <nav
+          aria-label="设置分类"
+          role="tablist"
+          className="bg-white rounded-xl border border-slate-200 p-1.5 grid grid-cols-3 sm:inline-flex sm:flex-wrap sm:items-center gap-1"
+        >
           {subTabs.map((item) => {
             const active = subTab === item.id
             return (
               <button
                 key={item.id}
+                id={`settings-tab-${item.id}`}
                 type="button"
-                aria-current={active ? 'page' : undefined}
+                role="tab"
+                aria-selected={active}
+                aria-controls={`settings-panel-${item.id}`}
+                title={item.desc}
                 onClick={() => switchTab(item.id)}
-                className={`flex items-center justify-center xl:justify-between gap-2 px-2 xl:px-3 py-2.5 rounded-lg text-left transition whitespace-nowrap xl:whitespace-normal shrink-0 xl:w-full ${
+                className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 rounded-[10px] text-xs sm:text-sm transition whitespace-nowrap ${
                   active
-                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                    : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent font-medium'
                 }`}
               >
-                <div className="flex flex-col xl:flex-row items-center xl:items-start gap-2 xl:gap-2.5 min-w-0">
-                  <span className="mt-0.5">{item.icon}</span>
-                  <div className="min-w-0">
-                    <div className={`text-sm ${active ? 'font-semibold' : 'font-medium'}`}><span className="xl:hidden">{item.shortLabel}</span><span className="hidden xl:inline">{item.label}</span></div>
-                    <div className="hidden xl:block text-[11px] text-slate-400 mt-0.5 truncate">{item.desc}</div>
-                  </div>
-                </div>
+                {item.icon}
+                <span>
+                  <span className="sm:hidden">{item.shortLabel}</span>
+                  <span className="hidden sm:inline">{item.label}</span>
+                </span>
                 {item.badge && (
                   <span
-                    className={`hidden xl:inline text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${
+                    className={`hidden sm:inline-flex items-center text-[11px] px-1.5 py-0.5 rounded font-medium leading-none ${
                       active ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'
                     }`}
                   >
@@ -396,10 +402,15 @@ export const SettingsPage: React.FC = () => {
               </button>
             )
           })}
-        </aside>
+        </nav>
 
-        {/* Right Panel */}
-        <section className="flex-1 min-w-0 w-full">
+        {/* Tab Content Panel */}
+        <section
+          id={`settings-panel-${subTab}`}
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${subTab}`}
+          className="min-w-0 w-full"
+        >
           {loading ? (
             <LoadingState label="正在加载系统设置…" />
           ) : loadError ? <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">{loadError}<button className="ml-4 underline" onClick={load}>重新加载</button></div> : (
