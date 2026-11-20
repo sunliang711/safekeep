@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
+import { useI18n } from '../contexts/I18nContext'
 
 interface Props {
   title: string
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function Modal({ title, onClose, busy = false, dismissible = true, size = 'lg', children }: Props) {
+  const { t } = useI18n()
   const root = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
   const blocked = useRef(false)
@@ -63,7 +65,7 @@ export function Modal({ title, onClose, busy = false, dismissible = true, size =
       if (event.target === event.currentTarget && dismissible && !busy) onClose()
     }}>
       <div ref={root} role="dialog" aria-modal="true" aria-label={title} aria-busy={busy} tabIndex={-1} className={`modal-container ${size === 'md' ? 'max-w-md' : size === 'xl' ? 'max-w-3xl' : 'max-w-2xl'}`}>
-        {dismissible && <button type="button" onClick={onClose} disabled={busy} aria-label="关闭弹窗" className="modal-close"><X className="w-4 h-4" /></button>}
+        {dismissible && <button type="button" onClick={onClose} disabled={busy} aria-label={t('common.closeModal')} className="modal-close"><X className="w-4 h-4" /></button>}
         {children}
       </div>
     </div>,

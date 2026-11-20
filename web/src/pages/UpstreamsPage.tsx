@@ -6,6 +6,7 @@ import { SecretField } from '../components/SecretField'
 import { api } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
+import { useI18n } from '../contexts/I18nContext'
 import { copyText } from '../utils/clipboard'
 import type { Upstream } from '../types'
 
@@ -72,6 +73,7 @@ const emptyForm = (): FormState => ({
 
 export const UpstreamsPage: React.FC = () => {
   const toast = useToast()
+  const { t } = useI18n()
   const [items, setItems] = useState<Upstream[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
@@ -97,7 +99,7 @@ export const UpstreamsPage: React.FC = () => {
       const res = await api.listUpstreams()
       setItems(res.items || [])
     } catch (err: any) {
-      toast.error(err.message || '加载上游失败')
+      toast.error(err.message || t('upstreams.loadError'))
     } finally {
       setLoading(false)
     }
@@ -107,10 +109,10 @@ export const UpstreamsPage: React.FC = () => {
     load()
     const params = new URLSearchParams(window.location.search)
     if (params.get('oauth') === 'success') {
-      toast.success('Dropbox OAuth2 授权成功，Token 已加密保存。')
+      toast.success(t('upstreams.oauthSuccess'))
       window.history.replaceState({}, '', '/upstreams')
     } else if (params.get('oauth') === 'error') {
-      toast.error(`Dropbox OAuth2 授权失败: ${params.get('reason') || '未知错误'}`)
+      toast.error(t('upstreams.oauthError', { reason: params.get('reason') || t('common.unknownError') }))
       window.history.replaceState({}, '', '/upstreams')
     }
   }, [])
@@ -197,16 +199,20 @@ export const UpstreamsPage: React.FC = () => {
         target_url: targetURL,
       })
       if (res.status === 'ok') {
-        const msg = `代理连接成功（HTTP ${res.http_status} · 延迟 ${res.latency_ms ?? 0} ms · 目标 ${res.target_url}）`
+        const msg = t('upstreams.proxyTestOk', {
+          status: res.http_status ?? '',
+          latency: res.latency_ms ?? 0,
+          target: res.target_url ?? targetURL,
+        })
         setProxyTestResult({ ok: true, text: msg })
-        toast.success('代理连通性测试通过！')
+        toast.success(t('upstreams.proxyTestOkToast'))
       } else {
-        const msg = `代理测试失败：${res.error || '未知错误'}`
+        const msg = t('upstreams.proxyTestFail', { error: res.error || t('common.unknownError') })
         setProxyTestResult({ ok: false, text: msg })
         toast.error(msg)
       }
     } catch (err: any) {
-      const msg = `代理测试失败：${err.message || '请求失败'}`
+      const msg = t('upstreams.proxyTestFail', { error: err.message || t('upstreams.proxyTestReqFail') })
       setProxyTestResult({ ok: false, text: msg })
       toast.error(msg)
     } finally {
@@ -215,7 +221,7 @@ export const UpstreamsPage: React.FC = () => {
   }
 
   const closeModal = () => {
-    if (JSON.stringify(form) !== initialFormSnap && !confirm('配置尚未保存，确定放弃修改吗？')) return
+    if (JSON.stringify(form) !== initialFormSnap && !confirm(t('upstreams.discardConfirm'))) return
     setModalOpen(false)
   }
 
@@ -291,10 +297,10 @@ export const UpstreamsPage: React.FC = () => {
         await api.createUpstream(payload)
       }
       setModalOpen(false)
-      toast.success('上游配置已保存')
+      toast.success(t('upstreams.savedToast'))
       await load()
     } catch (err: any) {
-      setModalErr(err.message || '保存失败')
+      setModalErr(err.message || t('upstreams.saveError'))
     } finally {
       setSaving(false)
     }
@@ -305,9 +311,9 @@ export const UpstreamsPage: React.FC = () => {
     try {
       const res = await api.testUpstream(id)
       if (res.status === 'ok') {
-        toast.success('上游存储及网络代理连通性测试通过！')
+        toast.success(t('upstreams.testOkToast'))
       } else {
-        toast.error(`连通性测试失败: ${res.error}`)
+        toast.error(t('upstreams.testFailToast', { error: res.error || t('common.unknownError') }))
       }
       await load()
     } catch (err: any) {
@@ -327,76 +333,77 @@ export const UpstreamsPage: React.FC = () => {
   }
 
   const handleDelete = async (u: Upstream) => {
-    if (!confirm(`确定删除上游 "${u.name}" 吗？`)) return
+    if (!confirm(t('upstreams.deleteConfirm', { name: u.name }))) return
     try {
       await api.deleteUpstream(u.id)
-      toast.success(`已删除上游 "${u.name}"`)
+      toast.success(t('upstreams.deletedToast', { name: u.name }))
       await load()
     } catch (err: any) {
       toast.error(err.message)
     }
   }
 
+  const openNew = () => {
+    setModalErr('')
+    const next = emptyForm()
+    setForm(next)
+    setInitialFormSnap(JSON.stringify(next))
+    setSavedSecretFlags({ secretKey: false, serviceAccountJSON: false, appSecret: false, refreshToken: false, proxyPass: false })
+    setProxyTestResult(null)
+    setProxyTargetURL('')
+    setModalOpen(true)
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">上游存储与网络代理</h1>
-          <p className="text-sm text-slate-500">管理 S3 / Cloudflare R2 / Google Cloud Storage / Dropbox 上游，支持为每个上游单独配置 HTTP / SOCKS5 代理</p>
+          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('upstreams.title')}</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">{t('upstreams.subtitle')}</p>
         </div>
         <button
-          onClick={() => {
-            setModalErr('')
-            const next = emptyForm()
-            setForm(next)
-            setInitialFormSnap(JSON.stringify(next))
-            setSavedSecretFlags({ secretKey: false, serviceAccountJSON: false, appSecret: false, refreshToken: false, proxyPass: false })
-            setProxyTestResult(null)
-            setProxyTargetURL('')
-            setModalOpen(true)
-          }}
+          onClick={openNew}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
         >
-          <Plus className="w-4 h-4" /> 添加上游存储
+          <Plus className="w-4 h-4" /> {t('upstreams.addBtn')}
         </button>
       </div>
 
       {loading ? (
-        <LoadingState label="正在读取上游存储…" />
+        <LoadingState label={t('upstreams.loading')} />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {items.length === 0 && <div className="md:col-span-2 bg-white rounded-xl border border-slate-200"><EmptyState title="连接你的第一个云端存储" description="支持 Amazon S3、Cloudflare R2、Google Cloud Storage (GCS) 与 Dropbox。每个上游都可以独立配置网络代理。" action={<button className="primary-button" onClick={() => {
-            const next = emptyForm()
-            setForm(next)
-            setInitialFormSnap(JSON.stringify(next))
-            setSavedSecretFlags({ secretKey: false, serviceAccountJSON: false, appSecret: false, refreshToken: false, proxyPass: false })
-            setProxyTestResult(null)
-            setProxyTargetURL('')
-            setModalErr('')
-            setModalOpen(true)
-          }}><Plus className="w-4 h-4" />添加上游存储</button>} /></div>}
+          {items.length === 0 && (
+            <div className="md:col-span-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+              <EmptyState
+                title={t('upstreams.emptyTitle')}
+                description={t('upstreams.emptyDesc')}
+                action={<button className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />{t('upstreams.addBtn')}</button>}
+              />
+            </div>
+          )}
           {items.map((u) => (
-            <div key={u.id} className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+            <div key={u.id} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-slate-900">{u.name}</span>
-                    <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100">{u.name}</span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
                       {u.type === 'gcs' ? 'GCS' : u.type === 'r2' ? 'R2' : u.type.toUpperCase()}
                     </span>
-                    <StatusBadge value={u.enabled ? 'enabled' : 'disabled'} label={u.enabled ? '启用' : '禁用'} />
+                    <StatusBadge value={u.enabled ? 'enabled' : 'disabled'} label={u.enabled ? t('common.enable') : t('common.disable')} />
                   </div>
                   <div className="text-xs text-slate-400 mt-1 font-mono">ID: {u.id}</div>
                 </div>
                 <StatusBadge value={u.last_test_status} />
               </div>
 
-              <div className="text-xs text-slate-600 space-y-1 bg-slate-50 rounded-lg p-3">
+              <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1 bg-slate-50 dark:bg-slate-800/60 rounded-lg p-3">
                 {u.type === 's3' ? (
                   <>
                     <div>Bucket: <span className="font-mono">{u.config.bucket}</span> ({u.config.region || 'us-east-1'})</div>
                     {u.config.endpoint && <div>Endpoint: <span className="font-mono">{u.config.endpoint}</span></div>}
-                    {u.config.base_prefix && <div>前缀: <span className="font-mono">{u.config.base_prefix}</span></div>}
+                    {u.config.base_prefix && <div>{t('upstreams.prefix')}: <span className="font-mono">{u.config.base_prefix}</span></div>}
                   </>
                 ) : u.type === 'r2' ? (
                   <>
@@ -405,7 +412,7 @@ export const UpstreamsPage: React.FC = () => {
                     {(u.config.resolved_endpoint || u.config.endpoint) && (
                       <div>Endpoint: <span className="font-mono break-all">{u.config.resolved_endpoint || u.config.endpoint}</span></div>
                     )}
-                    {u.config.base_prefix && <div>前缀: <span className="font-mono">{u.config.base_prefix}</span></div>}
+                    {u.config.base_prefix && <div>{t('upstreams.prefix')}: <span className="font-mono">{u.config.base_prefix}</span></div>}
                   </>
                 ) : u.type === 'gcs' ? (
                   <>
@@ -413,33 +420,48 @@ export const UpstreamsPage: React.FC = () => {
                     {u.config.project_id && <div>Project ID: <span className="font-mono">{u.config.project_id}</span></div>}
                     {u.config.client_email && <div>Service Account: <span className="font-mono break-all">{u.config.client_email}</span></div>}
                     {u.config.storage_class && <div>Storage Class: <span className="font-mono">{u.config.storage_class}</span></div>}
-                    {u.config.base_prefix && <div>前缀: <span className="font-mono">{u.config.base_prefix}</span></div>}
+                    {u.config.base_prefix && <div>{t('upstreams.prefix')}: <span className="font-mono">{u.config.base_prefix}</span></div>}
                   </>
                 ) : (
                   <>
-                    <div>授权状态: {u.config.authorized ? <span className="text-emerald-700 font-medium">已授权 ({u.config.account_email || '已连接'})</span> : <span className="text-amber-700">未授权</span>}</div>
-                    <div>根目录: <span className="font-mono">{u.config.root_path || '/'}</span></div>
+                    <div>
+                      {t('upstreams.authStatus')}:{' '}
+                      {u.config.authorized ? (
+                        <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+                          {t('upstreams.authorized', { email: u.config.account_email || t('upstreams.connected') })}
+                        </span>
+                      ) : (
+                        <span className="text-amber-700 dark:text-amber-400">{t('upstreams.unauthorized')}</span>
+                      )}
+                    </div>
+                    <div>{t('upstreams.rootPath')}: <span className="font-mono">{u.config.root_path || '/'}</span></div>
                     {!u.config.authorized ? (
                       (() => {
                         const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
                         const host = window.location.hostname
                         const isLocal = host === 'localhost' || host === '127.0.0.1'
                         const isNonLocalHTTP = window.location.protocol === 'http:' && !isLocal
-                        const targetHost = isLocal ? '<服务器IP>' : host
-                        const sshCmd = `ssh -N -L ${port}:127.0.0.1:${port} <用户名>@${targetHost}`
+                        const targetHost = isLocal ? t('upstreams.sshPlaceholderHost') : host
+                        const sshCmd = `ssh -N -L ${port}:127.0.0.1:${port} ${t('upstreams.sshPlaceholderUser')}@${targetHost}`
                         const localhostCallback = `http://localhost:${port}/admin/api/v1/oauth/dropbox/callback`
                         const currentCallback = `${window.location.origin}/admin/api/v1/oauth/dropbox/callback`
                         const copyTargetCallback = isNonLocalHTTP ? localhostCallback : currentCallback
 
                         return (
-                          <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
-                            <div className="font-medium">授权前请先配置 Dropbox 回调地址：</div>
-                            <div className="text-[11px] text-amber-800 leading-relaxed">
-                              前往 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b> 添加并保存回调地址。
-                              Dropbox 仅支持 <code className="font-mono">https://</code> 或 <code className="font-mono">http://localhost</code>，<b>不支持非 localhost 的 http://（如局域网/公网 IP）</b>。
+                          <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-amber-900 dark:text-amber-200 space-y-2">
+                            <div className="font-medium">{t('upstreams.dropboxSetupTitle')}</div>
+                            <div className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                              {t('upstreams.dropboxSetupDesc1')}
+                              <b>Redirect URIs</b>
+                              {t('upstreams.dropboxSetupDesc2')}
+                              <code className="font-mono">https://</code>
+                              {t('upstreams.dropboxSetupDesc3')}
+                              <code className="font-mono">http://localhost</code>
+                              {t('upstreams.dropboxSetupDesc4')}
+                              <b>{t('upstreams.dropboxSetupDesc5')}</b>.
                             </div>
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-amber-200 text-[11px] break-all">
+                              <code className="font-mono bg-white dark:bg-slate-900 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-500/30 text-[11px] break-all">
                                 {copyTargetCallback}
                               </code>
                               <button
@@ -447,28 +469,28 @@ export const UpstreamsPage: React.FC = () => {
                                 onClick={async () => {
                                   try {
                                     await copyText(copyTargetCallback)
-                                    toast.success('已复制回调地址，请粘贴并保存到 Dropbox App Console -> OAuth 2 -> Redirect URIs 后再点击授权。')
+                                    toast.success(t('upstreams.copiedCallbackToast'))
                                   } catch (e: any) {
-                                    toast.error(e.message || '复制失败')
+                                    toast.error(e.message || t('common.copyFailed'))
                                   }
                                 }}
-                                className="text-amber-800 hover:text-amber-950 inline-flex items-center gap-0.5 font-medium"
-                                title="复制回调地址"
+                                className="text-amber-800 dark:text-amber-200 hover:text-amber-950 dark:hover:text-white inline-flex items-center gap-0.5 font-medium"
+                                title={t('upstreams.copyCallbackTitle')}
                               >
-                                <Copy className="w-3 h-3" /> 复制
+                                <Copy className="w-3 h-3" /> {t('common.copy')}
                               </button>
                             </div>
-                            <div className="pt-1.5 border-t border-amber-200/80 text-[11px] text-amber-900 space-y-1">
+                            <div className="pt-1.5 border-t border-amber-200/80 dark:border-amber-500/20 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
                               <div className="font-medium">
-                                {isNonLocalHTTP
-                                  ? '检测到当前正在通过非 localhost 的 HTTP 访问，建议通过 SSH 隧道映射到本地后授权：'
-                                  : '若在无 HTTPS 域名的远程/局域网服务器部署，可在本地终端建立 SSH 隧道后使用 localhost 授权：'}
+                                {isNonLocalHTTP ? t('upstreams.sshTitleNonLocal') : t('upstreams.sshTitleDefault')}
                               </div>
-                              <div className="text-amber-800">
-                                1. 在本机执行端口转发（将本地 <code className="font-mono">localhost:{port}</code> 映射到目标服务器）：
+                              <div className="text-amber-800 dark:text-amber-300">
+                                {t('upstreams.sshStep1a')}
+                                <code className="font-mono">localhost:{port}</code>
+                                {t('upstreams.sshStep1b')}
                               </div>
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-amber-200 text-[11px] break-all">
+                                <code className="font-mono bg-white dark:bg-slate-900 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-500/30 text-[11px] break-all">
                                   {sshCmd}
                                 </code>
                                 <button
@@ -476,19 +498,21 @@ export const UpstreamsPage: React.FC = () => {
                                   onClick={async () => {
                                     try {
                                       await copyText(sshCmd)
-                                      toast.success('已复制 SSH 隧道命令（请将 <用户名> 替换为实际 SSH 登录用户）')
+                                      toast.success(t('upstreams.copiedSshToast'))
                                     } catch (e: any) {
-                                      toast.error(e.message || '复制失败')
+                                      toast.error(e.message || t('common.copyFailed'))
                                     }
                                   }}
-                                  className="text-amber-800 hover:text-amber-950 inline-flex items-center gap-0.5 font-medium"
-                                  title="复制 SSH 隧道命令"
+                                  className="text-amber-800 dark:text-amber-200 hover:text-amber-950 dark:hover:text-white inline-flex items-center gap-0.5 font-medium"
+                                  title={t('upstreams.copySshTitle')}
                                 >
-                                  <Copy className="w-3 h-3" /> 复制命令
+                                  <Copy className="w-3 h-3" /> {t('upstreams.copySshBtn')}
                                 </button>
                               </div>
-                              <div className="text-amber-800">
-                                2. 在浏览器改用 <code className="font-mono">http://localhost:{port}</code> 打开管理端，将上方回调地址填入 Dropbox Redirect URIs 并完成授权（授权成功后 Refresh Token 会持久化在服务端，之后可关闭隧道恢复原地址访问）。
+                              <div className="text-amber-800 dark:text-amber-300">
+                                {t('upstreams.sshStep2a')}
+                                <code className="font-mono">http://localhost:{port}</code>
+                                {t('upstreams.sshStep2b')}
                               </div>
                             </div>
                           </div>
@@ -496,8 +520,8 @@ export const UpstreamsPage: React.FC = () => {
                       })()
                     ) : (
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span>OAuth 回调 URI:</span>
-                        <code className="font-mono bg-white px-1.5 py-0.5 rounded border text-[11px] break-all">
+                        <span>{t('upstreams.oauthCallbackLabel')}</span>
+                        <code className="font-mono bg-white dark:bg-slate-900 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-[11px] break-all">
                           {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
                         </code>
                         <button
@@ -505,13 +529,13 @@ export const UpstreamsPage: React.FC = () => {
                           onClick={async () => {
                             try {
                               await copyText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
-                              toast.success('已复制 Dropbox Redirect URI。')
+                              toast.success(t('upstreams.copiedRedirectToast'))
                             } catch (e: any) {
-                              toast.error(e.message || '复制失败')
+                              toast.error(e.message || t('common.copyFailed'))
                             }
                           }}
-                          className="text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-0.5"
-                          title="复制回调地址"
+                          className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 inline-flex items-center gap-0.5"
+                          title={t('upstreams.copyCallbackTitle')}
                         >
                           <Copy className="w-3 h-3" />
                         </button>
@@ -520,46 +544,46 @@ export const UpstreamsPage: React.FC = () => {
                   </>
                 )}
                 <div>
-                  网络代理:{' '}
+                  {t('upstreams.networkProxy')}:{' '}
                   {u.proxy_enabled ? (
-                    <span className="font-mono text-indigo-700">
+                    <span className="font-mono text-indigo-700 dark:text-indigo-400">
                       {u.proxy_type.toUpperCase()}://{u.proxy_host}:{u.proxy_port}
                     </span>
                   ) : (
-                    '直连（未启用代理）'
+                    t('upstreams.directNoProxy')
                   )}
                 </div>
-                {u.last_test_error && <div className="text-rose-600 break-all">最近错误: {u.last_test_error}</div>}
+                {u.last_test_error && <div className="text-rose-600 dark:text-rose-400 break-all">{t('upstreams.lastError')}: {u.last_test_error}</div>}
               </div>
 
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <button
                   onClick={() => openEdit(u)}
-                  className="px-3 py-1.5 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium"
+                  className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 font-medium"
                 >
-                  编辑配置
+                  {t('upstreams.editConfig')}
                 </button>
                 <button
                   onClick={() => handleTest(u.id)}
                   disabled={testingId === u.id}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-medium"
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-indigo-50 dark:bg-indigo-500/15 hover:bg-indigo-100 dark:hover:bg-indigo-500/25 text-indigo-700 dark:text-indigo-300 rounded-lg font-medium"
                 >
                   <Wifi className="w-3.5 h-3.5" />
-                  {testingId === u.id ? '测试中...' : '测试连接'}
+                  {testingId === u.id ? t('upstreams.testing') : t('upstreams.testConnection')}
                 </button>
                 {u.type === 'dropbox' && (
                   <button
                     onClick={() => handleDropboxOAuth(u.id)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-sky-50 hover:bg-sky-100 text-sky-700 rounded-lg font-medium"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-sky-50 dark:bg-sky-500/15 hover:bg-sky-100 dark:hover:bg-sky-500/25 text-sky-700 dark:text-sky-300 rounded-lg font-medium"
                   >
                     <Link2 className="w-3.5 h-3.5" />
-                    Web OAuth2 授权
+                    {t('upstreams.dropboxOAuthBtn')}
                   </button>
                 )}
                 <button
                   onClick={() => handleDelete(u)}
-                  className="ml-auto p-1.5 text-slate-400 hover:text-rose-600 rounded-lg"
-                  title="删除"
+                  className="ml-auto p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg"
+                  title={t('common.delete')}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -570,21 +594,22 @@ export const UpstreamsPage: React.FC = () => {
       )}
 
       {modalOpen && (
-        <Modal title={form.id ? '编辑上游存储' : '添加上游存储'} onClose={closeModal} busy={saving}>
-          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
-            <h2 className="text-lg font-bold text-slate-900 mb-4">
-              {form.id ? '编辑上游存储' : '添加上游存储'}
+        <Modal title={form.id ? t('upstreams.modalEditTitle') : t('upstreams.modalAddTitle')} onClose={closeModal} busy={saving}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">
+              {form.id ? t('upstreams.modalEditTitle') : t('upstreams.modalAddTitle')}
             </h2>
             {modalErr && (
-              <div className="mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+              <div className="mb-3 p-2.5 rounded-lg bg-rose-50 dark:bg-rose-500/15 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs">
                 {modalErr}
               </div>
             )}
             <form onSubmit={handleSave} className="space-y-4 text-sm">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="upstreams-field-1" className="block font-medium text-slate-700 mb-1">名称</label>
-                  <input id="upstreams-field-1"
+                  <label htmlFor="upstreams-field-1" className="block font-medium text-slate-700 dark:text-slate-300 mb-1">{t('upstreams.fieldName')}</label>
+                  <input
+                    id="upstreams-field-1"
                     required
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -593,8 +618,9 @@ export const UpstreamsPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label htmlFor="upstreams-field-2" className="block font-medium text-slate-700 mb-1">类型</label>
-                  <select id="upstreams-field-2"
+                  <label htmlFor="upstreams-field-2" className="block font-medium text-slate-700 dark:text-slate-300 mb-1">{t('upstreams.fieldType')}</label>
+                  <select
+                    id="upstreams-field-2"
                     disabled={Boolean(form.id)}
                     value={form.type}
                     onChange={(e) => {
@@ -605,9 +631,9 @@ export const UpstreamsPage: React.FC = () => {
                         region: nextType === 'r2' ? (prev.region === 'us-east-1' || !prev.region ? 'auto' : prev.region) : nextType === 's3' ? (prev.region === 'auto' || !prev.region ? 'us-east-1' : prev.region) : prev.region,
                       }))
                     }}
-                    className="w-full px-3 py-2 border rounded-lg bg-white"
+                    className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-900"
                   >
-                    <option value="s3">Amazon S3 / 兼容对象存储</option>
+                    <option value="s3">{t('upstreams.typeS3')}</option>
                     <option value="r2">Cloudflare R2</option>
                     <option value="gcs">Google Cloud Storage (GCS)</option>
                     <option value="dropbox">Dropbox</option>
@@ -615,41 +641,43 @@ export const UpstreamsPage: React.FC = () => {
                 </div>
               </div>
 
-              <label className="inline-flex items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-200">
                 <input
                   type="checkbox"
                   checked={form.enabled}
                   onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
                 />
-                <span>启用该上游存储</span>
+                <span>{t('upstreams.fieldEnabled')}</span>
               </label>
 
               {form.type === 's3' ? (
-                <div className="border-t pt-4 space-y-3">
-                  <div className="font-semibold text-slate-800">S3 存储参数</div>
+                <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">{t('upstreams.s3Section')}</div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label htmlFor="upstreams-field-3" className="block text-xs text-slate-600 mb-1">Bucket *</label>
+                      <label htmlFor="upstreams-field-3" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">Bucket *</label>
                       <input id="upstreams-field-3" required value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-4" className="block text-xs text-slate-600 mb-1">Region</label>
+                      <label htmlFor="upstreams-field-4" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">Region</label>
                       <input id="upstreams-field-4" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-5" className="block text-xs text-slate-600 mb-1">Endpoint（MinIO/OSS 等可选）</label>
+                      <label htmlFor="upstreams-field-5" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.s3Endpoint')}</label>
                       <input id="upstreams-field-5" value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-6" className="block text-xs text-slate-600 mb-1">全局路径前缀</label>
+                      <label htmlFor="upstreams-field-6" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.basePrefix')}</label>
                       <input id="upstreams-field-6" value={form.base_prefix} onChange={(e) => setForm({ ...form, base_prefix: e.target.value })} placeholder="backups/" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-7" className="block text-xs text-slate-600 mb-1">Access Key ID *</label>
+                      <label htmlFor="upstreams-field-7" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">Access Key ID *</label>
                       <input id="upstreams-field-7" required value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-8" className="block text-xs text-slate-600 mb-1">Secret Access Key {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}</label>
+                      <label htmlFor="upstreams-field-8" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        Secret Access Key {form.id ? t('upstreams.secretMaskHint') : '*'}
+                      </label>
                       <SecretField
                         id="upstreams-field-8"
                         required={!form.id}
@@ -660,53 +688,57 @@ export const UpstreamsPage: React.FC = () => {
                       />
                     </div>
                     <div className="col-span-2">
-                      <label htmlFor="upstreams-field-9" className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD_IA / GLACIER）</label>
+                      <label htmlFor="upstreams-field-9" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.s3StorageClass')}</label>
                       <input id="upstreams-field-9" value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                   </div>
-                  <label className="inline-flex items-center gap-2 text-xs">
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
                     <input type="checkbox" checked={form.force_path_style} onChange={(e) => setForm({ ...form, force_path_style: e.target.checked })} />
-                    <span>Force Path Style（MinIO / 自建 S3 推荐开启）</span>
+                    <span>{t('upstreams.s3ForcePathStyle')}</span>
                   </label>
                 </div>
               ) : form.type === 'r2' ? (
-                <div className="border-t pt-4 space-y-3">
-                  <div className="font-semibold text-slate-800">Cloudflare R2 参数</div>
+                <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">{t('upstreams.r2Section')}</div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label htmlFor="upstreams-r2-account" className="block text-xs text-slate-600 mb-1">Cloudflare Account ID {form.endpoint.trim() ? '（可选）' : '*'}</label>
-                      <input id="upstreams-r2-account" required={!form.endpoint.trim()} value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })} placeholder="32 位 Account ID" className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
+                      <label htmlFor="upstreams-r2-account" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        {t('upstreams.r2AccountId', { req: form.endpoint.trim() ? t('upstreams.optionalParens') : '*' })}
+                      </label>
+                      <input id="upstreams-r2-account" required={!form.endpoint.trim()} value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })} placeholder={t('upstreams.r2AccountPlaceholder')} className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-r2-jurisdiction" className="block text-xs text-slate-600 mb-1">管辖区（Jurisdiction）</label>
-                      <select id="upstreams-r2-jurisdiction" value={form.jurisdiction} onChange={(e) => setForm({ ...form, jurisdiction: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg bg-white text-xs">
-                        <option value="">默认（全球）</option>
-                        <option value="eu">欧盟（EU）</option>
+                      <label htmlFor="upstreams-r2-jurisdiction" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.r2Jurisdiction')}</label>
+                      <select id="upstreams-r2-jurisdiction" value={form.jurisdiction} onChange={(e) => setForm({ ...form, jurisdiction: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg bg-white dark:bg-slate-900 text-xs">
+                        <option value="">{t('upstreams.r2JurDefault')}</option>
+                        <option value="eu">{t('upstreams.r2JurEu')}</option>
                         <option value="fedramp">FedRAMP</option>
                       </select>
                     </div>
                     <div>
-                      <label htmlFor="upstreams-r2-bucket" className="block text-xs text-slate-600 mb-1">Bucket *</label>
+                      <label htmlFor="upstreams-r2-bucket" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">Bucket *</label>
                       <input id="upstreams-r2-bucket" required value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-r2-region" className="block text-xs text-slate-600 mb-1">Region（默认 auto）</label>
+                      <label htmlFor="upstreams-r2-region" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.r2Region')}</label>
                       <input id="upstreams-r2-region" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="auto" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-r2-endpoint" className="block text-xs text-slate-600 mb-1">自定义 Endpoint（留空自动按 Account ID 生成）</label>
+                      <label htmlFor="upstreams-r2-endpoint" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.r2Endpoint')}</label>
                       <input id="upstreams-r2-endpoint" value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="https://<account_id>.r2.cloudflarestorage.com" className="w-full px-3 py-1.5 border rounded-lg text-xs font-mono" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-r2-prefix" className="block text-xs text-slate-600 mb-1">全局路径前缀</label>
+                      <label htmlFor="upstreams-r2-prefix" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.basePrefix')}</label>
                       <input id="upstreams-r2-prefix" value={form.base_prefix} onChange={(e) => setForm({ ...form, base_prefix: e.target.value })} placeholder="backups/" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-r2-ak" className="block text-xs text-slate-600 mb-1">R2 Access Key ID *</label>
+                      <label htmlFor="upstreams-r2-ak" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">R2 Access Key ID *</label>
                       <input id="upstreams-r2-ak" required value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-r2-sk" className="block text-xs text-slate-600 mb-1">R2 Secret Access Key {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}</label>
+                      <label htmlFor="upstreams-r2-sk" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        R2 Secret Access Key {form.id ? t('upstreams.secretMaskHint') : '*'}
+                      </label>
                       <SecretField
                         id="upstreams-r2-sk"
                         required={!form.id}
@@ -717,39 +749,39 @@ export const UpstreamsPage: React.FC = () => {
                       />
                     </div>
                     <div className="col-span-2">
-                      <label htmlFor="upstreams-r2-sc" className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD / STANDARD_IA）</label>
+                      <label htmlFor="upstreams-r2-sc" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.r2StorageClass')}</label>
                       <input id="upstreams-r2-sc" value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                   </div>
-                  <label className="inline-flex items-center gap-2 text-xs">
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
                     <input type="checkbox" checked={form.force_path_style} onChange={(e) => setForm({ ...form, force_path_style: e.target.checked })} />
-                    <span>Force Path Style（一般保持关闭，自定义网关或本地测试时可开启）</span>
+                    <span>{t('upstreams.r2ForcePathStyle')}</span>
                   </label>
                 </div>
               ) : form.type === 'gcs' ? (
-                <div className="border-t pt-4 space-y-3">
-                  <div className="font-semibold text-slate-800">Google Cloud Storage (GCS) 参数</div>
+                <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">{t('upstreams.gcsSection')}</div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label htmlFor="upstreams-gcs-bucket" className="block text-xs text-slate-600 mb-1">Bucket *</label>
+                      <label htmlFor="upstreams-gcs-bucket" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">Bucket *</label>
                       <input id="upstreams-gcs-bucket" required value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} placeholder="my-gcs-bucket" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-gcs-prefix" className="block text-xs text-slate-600 mb-1">全局路径前缀</label>
+                      <label htmlFor="upstreams-gcs-prefix" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.basePrefix')}</label>
                       <input id="upstreams-gcs-prefix" value={form.base_prefix} onChange={(e) => setForm({ ...form, base_prefix: e.target.value })} placeholder="backups/" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div className="col-span-2">
-                      <label htmlFor="upstreams-gcs-sc" className="block text-xs text-slate-600 mb-1">Storage Class（可选，如 STANDARD / NEARLINE / COLDLINE / ARCHIVE）</label>
+                      <label htmlFor="upstreams-gcs-sc" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.gcsStorageClass')}</label>
                       <input id="upstreams-gcs-sc" value={form.storage_class} onChange={(e) => setForm({ ...form, storage_class: e.target.value })} placeholder="STANDARD" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div className="col-span-2">
                       <div className="flex items-center justify-between mb-1">
-                        <label htmlFor="upstreams-gcs-sa" className="block text-xs text-slate-600">
-                          Service Account JSON 密钥 {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}
+                        <label htmlFor="upstreams-gcs-sa" className="block text-xs text-slate-600 dark:text-slate-300">
+                          {t('upstreams.gcsSaLabel')} {form.id ? t('upstreams.secretMaskHint') : '*'}
                         </label>
-                        <label className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 cursor-pointer font-medium">
+                        <label className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 cursor-pointer font-medium">
                           <Upload className="w-3.5 h-3.5" />
-                          <span>从 .json 文件导入</span>
+                          <span>{t('upstreams.gcsImportJson')}</span>
                           <input
                             type="file"
                             accept=".json,application/json"
@@ -762,9 +794,9 @@ export const UpstreamsPage: React.FC = () => {
                                 const text = await file.text()
                                 JSON.parse(text)
                                 setForm((prev) => ({ ...prev, service_account_json: text }))
-                                toast.success(`已读取 ${file.name}`)
+                                toast.success(t('upstreams.gcsLoadedFile', { name: file.name }))
                               } catch {
-                                toast.error('所选文件不是有效的 JSON 格式')
+                                toast.error(t('upstreams.gcsInvalidJson'))
                               }
                             }}
                           />
@@ -778,25 +810,33 @@ export const UpstreamsPage: React.FC = () => {
                         hasSaved={Boolean(form.id && savedSecretFlags.serviceAccountJSON)}
                         value={form.service_account_json}
                         onChange={(v) => setForm({ ...form, service_account_json: v })}
-                        placeholder={form.id && savedSecretFlags.serviceAccountJSON ? '留空则保持不变，点击可直接粘贴新 Service Account JSON' : '{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'}
+                        placeholder={form.id && savedSecretFlags.serviceAccountJSON ? t('upstreams.gcsSaPlaceholderSaved') : '{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'}
                         onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).service_account_json || '' : undefined}
                       />
                     </div>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
-                    请在 GCP Console → IAM 与管理 → 服务账号 创建 JSON 密钥，并授予目标 Bucket 的 <b>Storage Object Admin</b>（或 <code className="font-mono">roles/storage.objectAdmin</code> + <code className="font-mono">storage.buckets.get</code>）权限。所有请求及 Token 交换均遵循下方代理配置。
+                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                    {t('upstreams.gcsTip1')}
+                    <b>Storage Object Admin</b>
+                    {t('upstreams.gcsTip2')}
+                    <code className="font-mono">roles/storage.objectAdmin</code>
+                    {t('upstreams.gcsTip3')}
+                    <code className="font-mono">storage.buckets.get</code>
+                    {t('upstreams.gcsTip4')}
                   </div>
                 </div>
               ) : (
-                <div className="border-t pt-4 space-y-3">
-                  <div className="font-semibold text-slate-800">Dropbox 参数</div>
+                <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">{t('upstreams.dropboxSection')}</div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label htmlFor="upstreams-field-10" className="block text-xs text-slate-600 mb-1">App Key *</label>
+                      <label htmlFor="upstreams-field-10" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">App Key *</label>
                       <input id="upstreams-field-10" required value={form.app_key} onChange={(e) => setForm({ ...form, app_key: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-11" className="block text-xs text-slate-600 mb-1">App Secret {form.id ? '（默认掩码 *****，点右侧可查看）' : '*'}</label>
+                      <label htmlFor="upstreams-field-11" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        App Secret {form.id ? t('upstreams.secretMaskHint') : '*'}
+                      </label>
                       <SecretField
                         id="upstreams-field-11"
                         required={!form.id}
@@ -807,11 +847,11 @@ export const UpstreamsPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-12" className="block text-xs text-slate-600 mb-1">Dropbox 根目录</label>
+                      <label htmlFor="upstreams-field-12" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.dropboxRootPath')}</label>
                       <input id="upstreams-field-12" value={form.root_path} onChange={(e) => setForm({ ...form, root_path: e.target.value })} placeholder="/safekeep" className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-13" className="block text-xs text-slate-600 mb-1">Refresh Token（可选，默认掩码 *****）</label>
+                      <label htmlFor="upstreams-field-13" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.dropboxRefreshToken')}</label>
                       <SecretField
                         id="upstreams-field-13"
                         hasSaved={Boolean(form.id && savedSecretFlags.refreshToken)}
@@ -821,12 +861,14 @@ export const UpstreamsPage: React.FC = () => {
                       />
                     </div>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-900 space-y-1">
+                  <div className="p-2.5 rounded-lg bg-sky-50 dark:bg-sky-500/10 border border-sky-200 dark:border-sky-500/30 text-xs text-sky-900 dark:text-sky-200 space-y-1">
                     <div>
-                      授权前请先前往 Dropbox Developer Console → Settings → OAuth 2 → <b>Redirect URIs</b>，添加并保存以下回调地址：
+                      {t('upstreams.dropboxModalTip1')}
+                      <b>Redirect URIs</b>
+                      {t('upstreams.dropboxModalTip2')}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <code className="font-mono bg-white px-2 py-0.5 rounded border text-[11px] break-all">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <code className="font-mono bg-white dark:bg-slate-900 px-2 py-0.5 rounded border border-sky-200 dark:border-sky-500/30 text-[11px] break-all">
                         {`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`}
                       </code>
                       <button
@@ -834,52 +876,62 @@ export const UpstreamsPage: React.FC = () => {
                         onClick={async () => {
                           try {
                             await copyText(`${window.location.origin}/admin/api/v1/oauth/dropbox/callback`)
-                            toast.success('已复制回调地址')
+                            toast.success(t('upstreams.copiedSimpleCallback'))
                           } catch (e: any) {
-                            toast.error(e.message || '复制失败')
+                            toast.error(e.message || t('common.copyFailed'))
                           }
                         }}
-                        className="text-sky-700 hover:text-sky-900 inline-flex items-center gap-0.5 font-medium"
+                        className="text-sky-700 dark:text-sky-300 hover:text-sky-900 dark:hover:text-white inline-flex items-center gap-0.5 font-medium"
                       >
-                        <Copy className="w-3.5 h-3.5" /> 复制
+                        <Copy className="w-3.5 h-3.5" /> {t('common.copy')}
                       </button>
                     </div>
-                    <div className="text-[11px] text-sky-700">
-                      注意：Dropbox 仅对 <code className="font-mono">localhost</code> / <code className="font-mono">127.0.0.1</code> 允许 <code className="font-mono">http://</code>，局域网 IP 或域名必须使用 <code className="font-mono">https://</code>。
+                    <div className="text-[11px] text-sky-700 dark:text-sky-300">
+                      {t('upstreams.dropboxModalNote1')}
+                      <code className="font-mono">localhost</code>
+                      {t('upstreams.dropboxModalNote2')}
+                      <code className="font-mono">127.0.0.1</code>
+                      {t('upstreams.dropboxModalNote3')}
+                      <code className="font-mono">http://</code>
+                      {t('upstreams.dropboxModalNote4')}
+                      <code className="font-mono">https://</code>
+                      {t('upstreams.dropboxModalNote5')}
                     </div>
                   </div>
                 </div>
               )}
 
-              <div className="border-t pt-4 space-y-3">
-                <label className="inline-flex items-center gap-2 font-semibold text-slate-800">
+              <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                <label className="inline-flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-100">
                   <input type="checkbox" checked={form.proxy_enabled} onChange={(e) => setForm({ ...form, proxy_enabled: e.target.checked })} />
-                  <span>为该上游启用独立网络代理（HTTP / SOCKS5）</span>
+                  <span>{t('upstreams.proxyEnable')}</span>
                 </label>
                 {form.proxy_enabled && (
                   <div className="grid grid-cols-3 gap-3">
                     <div>
-                      <label htmlFor="upstreams-field-14" className="block text-xs text-slate-600 mb-1">代理协议</label>
-                      <select id="upstreams-field-14" value={form.proxy_type} onChange={(e) => setForm({ ...form, proxy_type: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white">
+                      <label htmlFor="upstreams-field-14" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyProtocol')}</label>
+                      <select id="upstreams-field-14" value={form.proxy_type} onChange={(e) => setForm({ ...form, proxy_type: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white dark:bg-slate-900">
                         <option value="socks5">SOCKS5</option>
                         <option value="http">HTTP</option>
                         <option value="https">HTTPS</option>
                       </select>
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-15" className="block text-xs text-slate-600 mb-1">代理主机</label>
+                      <label htmlFor="upstreams-field-15" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyHost')}</label>
                       <input id="upstreams-field-15" required value={form.proxy_host} onChange={(e) => setForm({ ...form, proxy_host: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-16" className="block text-xs text-slate-600 mb-1">端口</label>
+                      <label htmlFor="upstreams-field-16" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyPort')}</label>
                       <input id="upstreams-field-16" type="number" required min={1} max={65535} value={form.proxy_port} onChange={(e) => setForm({ ...form, proxy_port: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div>
-                      <label htmlFor="upstreams-field-17" className="block text-xs text-slate-600 mb-1">代理用户名（可选）</label>
+                      <label htmlFor="upstreams-field-17" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyUser')}</label>
                       <input id="upstreams-field-17" value={form.proxy_username} onChange={(e) => setForm({ ...form, proxy_username: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                     </div>
                     <div className="col-span-2">
-                      <label htmlFor="upstreams-field-18" className="block text-xs text-slate-600 mb-1">代理密码（{form.id ? '默认掩码 *****，点右侧可查看' : '可选'}）</label>
+                      <label htmlFor="upstreams-field-18" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        {t('upstreams.proxyPass', { hint: form.id ? t('upstreams.proxyPassSavedHint') : t('upstreams.proxyPassOptionalHint') })}
+                      </label>
                       <SecretField
                         id="upstreams-field-18"
                         disabled={form.clear_proxy_password}
@@ -889,17 +941,17 @@ export const UpstreamsPage: React.FC = () => {
                         onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).proxy_password || '' : undefined}
                       />
                       {form.id && (
-                        <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
+                        <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 mt-1">
                           <input type="checkbox" checked={form.clear_proxy_password} onChange={(e) => setForm({ ...form, clear_proxy_password: e.target.checked, proxy_password: '' })} />
-                          <span>清除已有代理密码</span>
+                          <span>{t('upstreams.clearProxyPass')}</span>
                         </label>
                       )}
                     </div>
-                    <div className="col-span-3 pt-2 border-t border-slate-100 space-y-2">
+                    <div className="col-span-3 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
                       <div className="flex flex-wrap items-end gap-2">
                         <div className="flex-1 min-w-[200px]">
-                          <label htmlFor="upstreams-field-proxy-target" className="block text-xs text-slate-600 mb-1">
-                            代理测试目标 URL（可选，默认 {defaultProxyTestURL()}）
+                          <label htmlFor="upstreams-field-proxy-target" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                            {t('upstreams.proxyTargetLabel', { url: defaultProxyTestURL() })}
                           </label>
                           <input
                             id="upstreams-field-proxy-target"
@@ -913,24 +965,24 @@ export const UpstreamsPage: React.FC = () => {
                           type="button"
                           onClick={handleTestProxy}
                           disabled={testingProxy || !form.proxy_host.trim() || !form.proxy_port}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-45 disabled:cursor-not-allowed text-indigo-700 rounded-lg text-xs font-medium shrink-0"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/15 hover:bg-indigo-100 dark:hover:bg-indigo-500/25 disabled:opacity-45 disabled:cursor-not-allowed text-indigo-700 dark:text-indigo-300 rounded-lg text-xs font-medium shrink-0"
                         >
                           {testingProxy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
-                          <span>{testingProxy ? '测试中...' : '测试代理'}</span>
+                          <span>{testingProxy ? t('upstreams.testing') : t('upstreams.testProxyBtn')}</span>
                         </button>
                       </div>
                       {proxyTestResult && (
                         <div
                           className={`p-2.5 rounded-lg border text-xs flex items-start gap-2 ${
                             proxyTestResult.ok
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                              : 'bg-rose-50 border-rose-200 text-rose-800'
+                              ? 'bg-emerald-50 dark:bg-emerald-500/15 border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200'
+                              : 'bg-rose-50 dark:bg-rose-500/15 border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200'
                           }`}
                         >
                           {proxyTestResult.ok ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                           ) : (
-                            <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                            <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
                           )}
                           <span className="break-all">{proxyTestResult.text}</span>
                         </div>
@@ -940,16 +992,16 @@ export const UpstreamsPage: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t">
-                <button type="button" disabled={saving} onClick={closeModal} className="px-4 py-2 rounded-lg border text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-                  取消
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button type="button" disabled={saving} onClick={closeModal} className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50">
+                  {t('common.cancel')}
                 </button>
                 <button
                   type="submit"
                   disabled={saving || (Boolean(form.id) && !upstreamDirty)}
                   className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white font-medium"
                 >
-                  {saving ? '保存中...' : form.id && !upstreamDirty ? '无改动' : '保存配置'}
+                  {saving ? t('common.saving') : form.id && !upstreamDirty ? t('common.noChanges') : t('upstreams.saveConfigBtn')}
                 </button>
               </div>
             </form>

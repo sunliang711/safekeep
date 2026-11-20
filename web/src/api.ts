@@ -1,3 +1,4 @@
+import { getCurrentLang, type Lang } from './contexts/I18nContext'
 import type {
   Admin,
   AuditLog,
@@ -201,7 +202,7 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
-export function formatTime(iso?: string): string {
+export function formatTime(iso?: string, lang: Lang = getCurrentLang()): string {
   if (!iso) return '-'
-  return new Date(iso).toLocaleString('zh-CN', { hour12: false })
+  return new Date(iso).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', { hour12: false })
 }

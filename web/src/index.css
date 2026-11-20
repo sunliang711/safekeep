@@ -63,6 +63,59 @@
     margin-right: 10px;
     cursor: pointer;
   }
+
+  html.dark body {
+    color: #cbd5e1;
+    background: #0b1120;
+  }
+
+  html.dark :focus-visible {
+    outline: 3px solid #6366f1;
+    outline-offset: 3px;
+  }
+
+  html.dark input:not([type='checkbox']):not([type='radio']),
+  html.dark select,
+  html.dark textarea {
+    background-color: #0f172a;
+    color: #e2e8f0;
+    border-color: #334155;
+  }
+
+  html.dark input:not([type='checkbox']):not([type='radio'])::placeholder,
+  html.dark textarea::placeholder {
+    color: #64748b;
+  }
+
+  html.dark input:not([type='checkbox']):not([type='radio']):focus,
+  html.dark select:focus,
+  html.dark textarea:focus {
+    border-color: #818cf8;
+    box-shadow: 0 0 0 3px #6366f133;
+  }
+
+  html.dark input:disabled,
+  html.dark select:disabled,
+  html.dark textarea:disabled {
+    background-color: #1e293b;
+    color: #94a3b8;
+  }
+
+  html.dark input[type='checkbox'],
+  html.dark input[type='radio'] {
+    accent-color: #6366f1;
+  }
+
+  html.dark input[type='file'] {
+    border-color: #4338ca;
+    background: #131c31;
+    color: #cbd5e1;
+  }
+
+  html.dark input::file-selector-button {
+    background: #312e81;
+    color: #c7d2fe;
+  }
 }
 
 @layer components {
@@ -282,6 +335,95 @@
 
   .filter-bar > div:has(input) {
     background: #f8faff;
+  }
+
+  html.dark .app-sidebar {
+    background: linear-gradient(170deg, #0b1120 0%, #090e1a 70%);
+    border-right: 1px solid #1e293b;
+    box-shadow: 4px 0 24px #02061766;
+  }
+
+  html.dark .page-content .bg-white.rounded-xl {
+    background-color: #111827;
+    box-shadow: 0 3px 16px #02061755;
+    border-color: #1f2937;
+  }
+
+  html.dark .page-content thead {
+    background: #0f172a;
+    border-color: #1f2937;
+  }
+
+  html.dark .page-content tbody tr:hover {
+    background: #1e293b66;
+  }
+
+  html.dark .page-content .text-slate-400 {
+    color: #94a3b8;
+  }
+
+  html.dark .empty-icon {
+    background: #312e8166;
+    color: #a5b4fc;
+  }
+
+  html.dark .primary-button {
+    background: #4f46e5;
+    box-shadow: 0 3px 10px #4f46e540;
+  }
+
+  html.dark .primary-button:hover {
+    background: #6366f1;
+  }
+
+  html.dark .modal-backdrop {
+    background: #020617b3;
+  }
+
+  html.dark .modal-container {
+    box-shadow: 0 24px 80px #02061799;
+  }
+
+  html.dark .modal-close {
+    background: #1e293b;
+    color: #94a3b8;
+  }
+
+  html.dark .modal-close:hover {
+    background: #334155;
+    color: #f1f5f9;
+  }
+
+  html.dark .drawer-backdrop {
+    background: #02061799;
+  }
+
+  html.dark .drawer-panel {
+    background: #111827;
+    border-left: 1px solid #1f2937;
+    box-shadow: -12px 0 40px #02061780;
+  }
+
+  html.dark .filter-bar > div:has(input) {
+    background: #0f172a;
+    border-color: #334155;
+  }
+
+  html.dark .filter-bar > div:has(input) input {
+    background: transparent;
+  }
+
+  :where(html.dark) *,
+  :where(html.dark) ::before,
+  :where(html.dark) ::after {
+    border-color: #1f2937;
+  }
+
+  /* Generic dark-mode fallback for modal inner card */
+  html.dark .modal-container > div.bg-white {
+    background-color: #111827;
+    border: 1px solid #1f2937;
+    color: #e2e8f0;
   }
 
   @media (max-width: 767px) {

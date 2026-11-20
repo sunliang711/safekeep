@@ -5,6 +5,7 @@ import { LoadingState } from '../components/Feedback'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
+import { useI18n } from '../contexts/I18nContext'
 import { copyText } from '../utils/clipboard'
 import type { Admin, SMTPConfig, SystemSettings } from '../types'
 
@@ -54,6 +55,7 @@ function smtpSnapshot(cfg: {
 
 export const SettingsPage: React.FC = () => {
   const toast = useToast()
+  const { t, lang } = useI18n()
   const [subTab, setSubTab] = useState<SettingsSubTab>('general')
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
@@ -155,7 +157,7 @@ export const SettingsPage: React.FC = () => {
       setAdmins(a.items || [])
       applySavedSmtp(smtp)
     } catch (e: any) {
-      setLoadError(e.message || '加载设置失败')
+      setLoadError(e.message || t('settings.loadError'))
     } finally {
       setLoading(false)
     }
@@ -173,7 +175,7 @@ export const SettingsPage: React.FC = () => {
     e.preventDefault()
     if (!settings) return
     if (settings.max_file_size_bytes <= 0) {
-      toast.error('默认单文件上限必须大于 0')
+      toast.error(t('settings.maxFileSizeZeroErr'))
       return
     }
     setSavingGeneral(true)
@@ -182,9 +184,9 @@ export const SettingsPage: React.FC = () => {
       setSettings(updated)
       syncSizeFieldsFromSettings(updated)
       setSavedGeneralSnap(JSON.stringify(updated))
-      toast.success('全局运行设置已保存')
+      toast.success(t('settings.saveGeneralSuccess'))
     } catch (e: any) {
-      toast.error(e.message || '保存全局设置失败')
+      toast.error(e.message || t('settings.saveGeneralError'))
     } finally {
       setSavingGeneral(false)
     }
@@ -231,7 +233,7 @@ export const SettingsPage: React.FC = () => {
       event.returnValue = ''
     }
     const beforeNavigate = (event: Event) => {
-      if (!confirm('系统设置尚未保存，确定离开并放弃修改吗？')) event.preventDefault()
+      if (!confirm(t('settings.leaveConfirm'))) event.preventDefault()
     }
     window.addEventListener('beforeunload', beforeUnload)
     window.addEventListener('safekeep:before-navigate', beforeNavigate)
@@ -239,7 +241,7 @@ export const SettingsPage: React.FC = () => {
       window.removeEventListener('beforeunload', beforeUnload)
       window.removeEventListener('safekeep:before-navigate', beforeNavigate)
     }
-  }, [generalDirty, smtpDirty])
+  }, [generalDirty, smtpDirty, t])
 
   const saveSMTP = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -247,9 +249,9 @@ export const SettingsPage: React.FC = () => {
     try {
       const updated = await api.updateSMTP(smtpPayload())
       applySavedSmtp(updated)
-      toast.success('SMTP 邮件告警配置已保存')
+      toast.success(t('settings.smtpSaveSuccess'))
     } catch (e: any) {
-      toast.error(e.message || '保存 SMTP 配置失败')
+      toast.error(e.message || t('settings.smtpSaveError'))
     } finally {
       setSavingSmtp(false)
     }
@@ -261,10 +263,10 @@ export const SettingsPage: React.FC = () => {
     try {
       await copyText(valueToCopy)
       setSmtpPwdCopied(true)
-      toast.success('已复制 SMTP 授权码')
+      toast.success(t('settings.smtpCopiedPwd'))
       setTimeout(() => setSmtpPwdCopied(false), 1500)
     } catch (e: any) {
-      toast.error(e.message || '复制失败，请点击眼睛图标显示后手动复制')
+      toast.error(e.message || t('settings.smtpCopyPwdFail'))
     }
   }
 
@@ -278,16 +280,16 @@ export const SettingsPage: React.FC = () => {
   const testSMTP = async () => {
     setSmtpTestResult(null)
     setSmtpTesting(true)
-    const nowText = new Date().toLocaleTimeString()
+    const nowText = new Date().toLocaleTimeString(lang === 'en' ? 'en-US' : 'zh-CN', { hour12: false })
     try {
       const res = await api.testSMTP(smtpPayload())
-      const targetText = res.to && res.to.length > 0 ? res.to.join(', ') : smtpToEmails || '配置收件人'
+      const targetText = res.to && res.to.length > 0 ? res.to.join(', ') : smtpToEmails || t('settings.smtpDefaultRecipients')
       const serverText = res.host ? `${res.host}:${res.port || smtpPort}` : `${smtpHost}:${smtpPort}`
-      const successMsg = `测试邮件发送成功！已发送至 ${targetText}（${serverText}）`
+      const successMsg = t('settings.smtpTestSuccess', { target: targetText, server: serverText })
       setSmtpTestResult({ ok: true, message: successMsg, time: nowText })
       toast.success(successMsg)
     } catch (e: any) {
-      const failMsg = `测试邮件发送失败：${e.message || '未知错误'}`
+      const failMsg = t('settings.smtpTestFail', { error: e.message || t('common.unknownError') })
       setSmtpTestResult({ ok: false, message: failMsg, time: nowText })
       toast.error(failMsg)
     } finally {
@@ -302,11 +304,11 @@ export const SettingsPage: React.FC = () => {
       await api.createAdmin(newAdminUser, newAdminPass)
       setNewAdminUser('')
       setNewAdminPass('')
-      toast.success('新管理员已创建')
+      toast.success(t('settings.createdAdminToast'))
       const res = await api.listAdmins()
       setAdmins(res.items || [])
     } catch (e: any) {
-      toast.error(e.message || '创建管理员失败')
+      toast.error(e.message || t('settings.createAdminError'))
     } finally {
       setCreatingAdmin(false)
     }
@@ -319,9 +321,9 @@ export const SettingsPage: React.FC = () => {
       await api.changePassword(oldPwd, newPwd)
       setOldPwd('')
       setNewPwd('')
-      toast.success('当前管理员密码已修改')
+      toast.success(t('settings.changedOwnPwdToast'))
     } catch (e: any) {
-      toast.error(e.message || '修改密码失败')
+      toast.error(e.message || t('settings.changeOwnPwdError'))
     } finally {
       setChangingOwnPwd(false)
     }
@@ -330,24 +332,24 @@ export const SettingsPage: React.FC = () => {
   const subTabs: { id: SettingsSubTab; label: string; shortLabel: string; desc: string; icon: React.ReactNode; badge?: string }[] = [
     {
       id: 'general',
-      label: '全局运行参数',
-      shortLabel: '运行参数',
-      desc: '单文件上限、每日熔断、并发',
+      label: t('settings.tabGeneral'),
+      shortLabel: t('settings.tabGeneralShort'),
+      desc: t('settings.tabGeneralDesc'),
       icon: <SlidersHorizontal className="w-4 h-4 shrink-0" />,
     },
     {
       id: 'smtp',
-      label: 'SMTP 邮件告警',
-      shortLabel: '邮件告警',
-      desc: '超限拒绝与流量熔断通知',
+      label: t('settings.tabSmtp'),
+      shortLabel: t('settings.tabSmtpShort'),
+      desc: t('settings.tabSmtpDesc'),
       icon: <Mail className="w-4 h-4 shrink-0" />,
-      badge: smtpEnabled ? '已启用' : '未启用',
+      badge: smtpEnabled ? t('common.enabled') : t('common.notEnabled'),
     },
     {
       id: 'admins',
-      label: '管理员账号',
-      shortLabel: '管理员',
-      desc: '管理员列表与密码管理',
+      label: t('settings.tabAdmins'),
+      shortLabel: t('settings.tabAdminsShort'),
+      desc: t('settings.tabAdminsDesc'),
       icon: <Users className="w-4 h-4 shrink-0" />,
       badge: `${admins.length}`,
     },
@@ -356,16 +358,16 @@ export const SettingsPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold text-slate-900">系统设置</h1>
-        <p className="text-sm text-slate-500">管理全局运行参数、SMTP 邮件告警服务与管理员账号</p>
+        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('settings.title')}</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400">{t('settings.subtitle')}</p>
       </div>
 
       <div className="space-y-5">
         {/* Top Horizontal Tab Navigation */}
         <nav
-          aria-label="设置分类"
+          aria-label={t('settings.tabsAria')}
           role="tablist"
-          className="bg-white rounded-xl border border-slate-200 p-1.5 grid grid-cols-3 sm:inline-flex sm:flex-wrap sm:items-center gap-1"
+          className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-1.5 grid grid-cols-3 sm:inline-flex sm:flex-wrap sm:items-center gap-1"
         >
           {subTabs.map((item) => {
             const active = subTab === item.id
@@ -381,8 +383,8 @@ export const SettingsPage: React.FC = () => {
                 onClick={() => switchTab(item.id)}
                 className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 rounded-[10px] text-xs sm:text-sm transition whitespace-nowrap ${
                   active
-                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold'
-                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent font-medium'
+                    ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 font-semibold'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white border border-transparent font-medium'
                 }`}
               >
                 {item.icon}
@@ -393,7 +395,9 @@ export const SettingsPage: React.FC = () => {
                 {item.badge && (
                   <span
                     className={`hidden sm:inline-flex items-center text-[11px] px-1.5 py-0.5 rounded font-medium leading-none ${
-                      active ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'
+                      active
+                        ? 'bg-indigo-100 dark:bg-indigo-500/25 text-indigo-700 dark:text-indigo-200'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
                     }`}
                   >
                     {item.badge}
@@ -412,35 +416,42 @@ export const SettingsPage: React.FC = () => {
           className="min-w-0 w-full"
         >
           {loading ? (
-            <LoadingState label="正在加载系统设置…" />
-          ) : loadError ? <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">{loadError}<button className="ml-4 underline" onClick={load}>重新加载</button></div> : (
+            <LoadingState label={t('settings.loading')} />
+          ) : loadError ? (
+            <div role="alert" className="rounded-xl border border-rose-200 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 p-5 text-sm text-rose-700 dark:text-rose-300">
+              {loadError}
+              <button className="ml-4 underline" onClick={load}>{t('common.reload')}</button>
+            </div>
+          ) : (
             <>
               {subTab === 'general' && settings && (
-                <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
                   <div>
-                    <h2 className="font-semibold text-slate-900">全局运行参数</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">控制本地缓冲、上传限流与熔断策略，修改后立即对新任务生效（Worker 数需重启）</p>
+                    <h2 className="font-semibold text-slate-900 dark:text-slate-100">{t('settings.generalTitle')}</h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t('settings.generalDesc')}</p>
                   </div>
                   <form onSubmit={saveSettings} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                     <div>
-                      <label htmlFor="settings-field-1" className="block text-xs text-slate-600 mb-1">临时缓冲目录 (spool_dir)</label>
-                      <input id="settings-field-1"
+                      <label htmlFor="settings-field-1" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.spoolDir')}</label>
+                      <input
+                        id="settings-field-1"
                         value={settings.spool_dir}
                         onChange={(e) => setSettings({ ...settings, spool_dir: e.target.value })}
                         className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs"
                       />
                     </div>
                     <div>
-                      <label htmlFor="settings-field-2" className="block text-xs text-slate-600 mb-1">公网回调 Base URL（Dropbox OAuth2）</label>
-                      <input id="settings-field-2"
+                      <label htmlFor="settings-field-2" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.publicBaseUrl')}</label>
+                      <input
+                        id="settings-field-2"
                         value={settings.public_base_url}
                         onChange={(e) => setSettings({ ...settings, public_base_url: e.target.value })}
                         className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs"
                       />
                     </div>
                     <div>
-                      <label htmlFor="settings-field-3" className="block text-xs text-slate-600 mb-1">
-                        默认单文件上限（默认 100 MB）
+                      <label htmlFor="settings-field-3" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        {t('settings.maxFileSize')}
                       </label>
                       <div className="flex gap-1.5">
                         <input
@@ -459,7 +470,7 @@ export const SettingsPage: React.FC = () => {
                           className="flex-1 min-w-0 px-3 py-1.5 border rounded-lg"
                         />
                         <select
-                          aria-label="默认单文件上限单位"
+                          aria-label={t('settings.maxFileSizeUnitAria')}
                           value={maxFileSizeField.unit}
                           onChange={(e) =>
                             updateByteField('max_file_size_bytes', setMaxFileSizeField, {
@@ -467,7 +478,7 @@ export const SettingsPage: React.FC = () => {
                               unit: e.target.value as SizeUnit,
                             })
                           }
-                          className="w-20 px-2 py-1.5 border rounded-lg bg-white font-mono text-xs"
+                          className="w-20 px-2 py-1.5 border rounded-lg bg-white dark:bg-slate-900 font-mono text-xs"
                         >
                           <option value="KB">KB</option>
                           <option value="MB">MB</option>
@@ -475,12 +486,15 @@ export const SettingsPage: React.FC = () => {
                         </select>
                       </div>
                       <div className="text-[11px] text-slate-400 mt-1">
-                        当前：{formatBytes(settings.max_file_size_bytes)}（{settings.max_file_size_bytes.toLocaleString()} 字节）
+                        {t('settings.currentValue', {
+                          formatted: formatBytes(settings.max_file_size_bytes),
+                          bytes: settings.max_file_size_bytes.toLocaleString(),
+                        })}
                       </div>
                     </div>
                     <div>
-                      <label htmlFor="settings-field-4" className="block text-xs text-slate-600 mb-1">
-                        每日发送熔断阈值（默认 1 GB，0=不熔断）
+                      <label htmlFor="settings-field-4" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        {t('settings.dailyLimit')}
                       </label>
                       <div className="flex gap-1.5">
                         <input
@@ -499,7 +513,7 @@ export const SettingsPage: React.FC = () => {
                           className="flex-1 min-w-0 px-3 py-1.5 border rounded-lg"
                         />
                         <select
-                          aria-label="每日发送熔断阈值单位"
+                          aria-label={t('settings.dailyLimitUnitAria')}
                           value={dailyLimitField.unit}
                           onChange={(e) =>
                             updateByteField('daily_traffic_limit_bytes', setDailyLimitField, {
@@ -507,7 +521,7 @@ export const SettingsPage: React.FC = () => {
                               unit: e.target.value as SizeUnit,
                             })
                           }
-                          className="w-20 px-2 py-1.5 border rounded-lg bg-white font-mono text-xs"
+                          className="w-20 px-2 py-1.5 border rounded-lg bg-white dark:bg-slate-900 font-mono text-xs"
                         >
                           <option value="KB">KB</option>
                           <option value="MB">MB</option>
@@ -516,13 +530,16 @@ export const SettingsPage: React.FC = () => {
                       </div>
                       <div className="text-[11px] text-slate-400 mt-1">
                         {settings.daily_traffic_limit_bytes > 0
-                          ? `当前：${formatBytes(settings.daily_traffic_limit_bytes)}（${settings.daily_traffic_limit_bytes.toLocaleString()} 字节）`
-                          : '当前：不熔断（0 字节）'}
+                          ? t('settings.currentValue', {
+                              formatted: formatBytes(settings.daily_traffic_limit_bytes),
+                              bytes: settings.daily_traffic_limit_bytes.toLocaleString(),
+                            })
+                          : t('settings.currentNoLimitBreaker')}
                       </div>
                     </div>
                     <div>
-                      <label htmlFor="settings-field-5" className="block text-xs text-slate-600 mb-1">
-                        本地缓冲总容量上限（0=不限）
+                      <label htmlFor="settings-field-5" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                        {t('settings.maxSpool')}
                       </label>
                       <div className="flex gap-1.5">
                         <input
@@ -541,7 +558,7 @@ export const SettingsPage: React.FC = () => {
                           className="flex-1 min-w-0 px-3 py-1.5 border rounded-lg"
                         />
                         <select
-                          aria-label="本地缓冲总容量上限单位"
+                          aria-label={t('settings.maxSpoolUnitAria')}
                           value={maxSpoolField.unit}
                           onChange={(e) =>
                             updateByteField('max_spool_bytes', setMaxSpoolField, {
@@ -549,7 +566,7 @@ export const SettingsPage: React.FC = () => {
                               unit: e.target.value as SizeUnit,
                             })
                           }
-                          className="w-20 px-2 py-1.5 border rounded-lg bg-white font-mono text-xs"
+                          className="w-20 px-2 py-1.5 border rounded-lg bg-white dark:bg-slate-900 font-mono text-xs"
                         >
                           <option value="KB">KB</option>
                           <option value="MB">MB</option>
@@ -558,13 +575,17 @@ export const SettingsPage: React.FC = () => {
                       </div>
                       <div className="text-[11px] text-slate-400 mt-1">
                         {settings.max_spool_bytes > 0
-                          ? `当前：${formatBytes(settings.max_spool_bytes)}（${settings.max_spool_bytes.toLocaleString()} 字节）`
-                          : '当前：不限（0 字节）'}
+                          ? t('settings.currentValue', {
+                              formatted: formatBytes(settings.max_spool_bytes),
+                              bytes: settings.max_spool_bytes.toLocaleString(),
+                            })
+                          : t('settings.currentUnlimited')}
                       </div>
                     </div>
                     <div>
-                      <label htmlFor="settings-field-6" className="block text-xs text-slate-600 mb-1">同步模式超时（秒，超时转后台）</label>
-                      <input id="settings-field-6"
+                      <label htmlFor="settings-field-6" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.syncTimeout')}</label>
+                      <input
+                        id="settings-field-6"
                         type="number"
                         min={1}
                         value={settings.sync_timeout_sec}
@@ -573,8 +594,9 @@ export const SettingsPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label htmlFor="settings-field-7" className="block text-xs text-slate-600 mb-1">异步并发 Worker 数（重启生效）</label>
-                      <input id="settings-field-7"
+                      <label htmlFor="settings-field-7" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.workerConcurrency')}</label>
+                      <input
+                        id="settings-field-7"
                         type="number"
                         min={1}
                         value={settings.worker_concurrency}
@@ -583,8 +605,9 @@ export const SettingsPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label htmlFor="settings-field-8" className="block text-xs text-slate-600 mb-1">失败最大重试次数</label>
-                      <input id="settings-field-8"
+                      <label htmlFor="settings-field-8" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.maxRetry')}</label>
+                      <input
+                        id="settings-field-8"
                         type="number"
                         min={1}
                         value={settings.max_retry_attempts}
@@ -592,14 +615,16 @@ export const SettingsPage: React.FC = () => {
                         className="w-full px-3 py-1.5 border rounded-lg"
                       />
                     </div>
-                    <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-3 pt-4 border-t">
-                      <span role="status" className={`text-xs ${generalDirty ? 'text-amber-600' : 'text-slate-400'}`}>{generalDirty ? '有未保存的修改' : '当前配置已保存'}</span>
+                    <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+                      <span role="status" className={`text-xs ${generalDirty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
+                        {generalDirty ? t('settings.dirtyStatus') : t('settings.cleanStatus')}
+                      </span>
                       <button
                         type="submit"
                         disabled={savingGeneral || !generalDirty}
                         className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-opacity"
                       >
-                        {savingGeneral ? '保存中...' : generalDirty ? '保存全局设置' : '已保存'}
+                        {savingGeneral ? t('common.saving') : generalDirty ? t('settings.saveGeneralBtn') : t('common.saved')}
                       </button>
                     </div>
                   </form>
@@ -607,23 +632,24 @@ export const SettingsPage: React.FC = () => {
               )}
 
               {subTab === 'smtp' && (
-                <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h2 className="font-semibold text-slate-900">SMTP 邮件告警设置</h2>
-                      <p className="text-xs text-slate-500 mt-0.5">用于单文件超限拒绝（&gt;100 MiB）与每日流量熔断（&gt;1 GiB）告警通知</p>
+                      <h2 className="font-semibold text-slate-900 dark:text-slate-100">{t('settings.smtpTitle')}</h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t('settings.smtpDesc')}</p>
                     </div>
-                    <StatusBadge value={smtpEnabled ? 'enabled' : 'disabled'} label={smtpEnabled ? '已启用' : '未启用'} />
+                    <StatusBadge value={smtpEnabled ? 'enabled' : 'disabled'} label={smtpEnabled ? t('common.enabled') : t('common.notEnabled')} />
                   </div>
                   <form onSubmit={saveSMTP} className="space-y-4 text-sm">
-                    <label className="inline-flex items-center gap-2">
+                    <label className="inline-flex items-center gap-2 text-slate-800 dark:text-slate-100">
                       <input type="checkbox" checked={smtpEnabled} onChange={(e) => setSmtpEnabled(e.target.checked)} />
-                      <span className="font-medium">启用 SMTP 邮件告警</span>
+                      <span className="font-medium">{t('settings.smtpEnable')}</span>
                     </label>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label htmlFor="settings-field-9" className="block text-xs text-slate-600 mb-1">SMTP 服务器主机</label>
-                        <input id="settings-field-9"
+                        <label htmlFor="settings-field-9" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpHost')}</label>
+                        <input
+                          id="settings-field-9"
                           value={smtpHost}
                           onChange={(e) => setSmtpHost(e.target.value)}
                           placeholder="smtp.qq.com"
@@ -631,8 +657,9 @@ export const SettingsPage: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <label htmlFor="settings-field-10" className="block text-xs text-slate-600 mb-1">端口</label>
-                        <input id="settings-field-10"
+                        <label htmlFor="settings-field-10" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpPort')}</label>
+                        <input
+                          id="settings-field-10"
                           type="number"
                           min={1}
                           max={65535}
@@ -642,11 +669,11 @@ export const SettingsPage: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-slate-600 mb-1">加密方式</label>
-                        <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden bg-slate-50 w-full">
+                        <label className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpTls')}</label>
+                        <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800 w-full">
                           {(
                             [
-                              { value: 'none', label: '无 (25)' },
+                              { value: 'none', label: t('settings.smtpTlsNone') },
                               { value: 'starttls', label: 'STARTTLS (587)' },
                               { value: 'tls', label: 'TLS (465)' },
                             ] as const
@@ -657,8 +684,10 @@ export const SettingsPage: React.FC = () => {
                                 key={opt.value}
                                 type="button"
                                 onClick={() => changeSmtpTLSMode(opt.value)}
-                                className={`flex-1 px-2.5 py-1.5 text-xs font-medium transition border-r last:border-r-0 border-slate-300 ${
-                                  active ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                                className={`flex-1 px-2.5 py-1.5 text-xs font-medium transition border-r last:border-r-0 border-slate-300 dark:border-slate-700 ${
+                                  active
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
                                 }`}
                               >
                                 {opt.label}
@@ -667,28 +696,29 @@ export const SettingsPage: React.FC = () => {
                           })}
                         </div>
                         {smtpPort === 465 && smtpTLSMode !== 'tls' && (
-                          <div className="text-[11px] text-amber-700 mt-1">提示：465 端口通常需选择「TLS」直连加密，否则握手会失败。</div>
+                          <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">{t('settings.smtpPort465Hint')}</div>
                         )}
                         {smtpPort === 587 && smtpTLSMode === 'tls' && (
-                          <div className="text-[11px] text-amber-700 mt-1">提示：587 端口通常使用「STARTTLS」加密。</div>
+                          <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">{t('settings.smtpPort587Hint')}</div>
                         )}
                       </div>
                       <div>
-                        <label htmlFor="settings-field-11" className="block text-xs text-slate-600 mb-1">SMTP 用户名</label>
-                        <input id="settings-field-11"
+                        <label htmlFor="settings-field-11" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpUsername')}</label>
+                        <input
+                          id="settings-field-11"
                           value={smtpUsername}
                           onChange={(e) => setSmtpUsername(e.target.value)}
-                          placeholder="alerts@example.com（可留空不认证）"
+                          placeholder={t('settings.smtpUsernamePlaceholder')}
                           className="w-full px-3 py-1.5 border rounded-lg"
                         />
-                        <div className="text-[11px] text-slate-400 mt-1">可留空（不认证）；未加密（无）连接不能使用密码认证</div>
+                        <div className="text-[11px] text-slate-400 mt-1">{t('settings.smtpUsernameHint')}</div>
                         {smtpTLSMode === 'none' && smtpUsername.trim() !== '' && (
-                          <div className="text-[11px] text-amber-700 mt-0.5">当前选择「无」加密，认证请求会被拒绝，请改用 STARTTLS/TLS 或清空用户名。</div>
+                          <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">{t('settings.smtpNoneAuthWarn')}</div>
                         )}
                       </div>
                       <div>
-                        <label className="block text-xs text-slate-600 mb-1">
-                          SMTP 密码/授权码 {smtpHasPassword ? '（已配置，默认掩码显示 *****）' : ''}
+                        <label className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                          {t('settings.smtpPassword')}{smtpHasPassword ? t('settings.smtpPasswordConfigured') : ''}
                         </label>
                         <div className="flex items-center gap-1.5">
                           <div className="relative flex-1">
@@ -712,7 +742,7 @@ export const SettingsPage: React.FC = () => {
                                     : '*****'
                                   : smtpPassword
                               }
-                              placeholder={smtpHasPassword ? '输入新密码/授权码（留空保持不变）' : '请输入 SMTP 密码或授权码'}
+                              placeholder={smtpHasPassword ? t('settings.smtpPasswordPlaceholderSaved') : t('settings.smtpPasswordPlaceholderNew')}
                               onFocus={() => {
                                 if (!smtpClearPassword && smtpHasPassword && !smtpEditingPwd) {
                                   setSmtpEditingPwd(true)
@@ -728,14 +758,14 @@ export const SettingsPage: React.FC = () => {
                                 if (!smtpEditingPwd) setSmtpEditingPwd(true)
                                 setSmtpPassword(e.target.value)
                               }}
-                              className="w-full px-3 py-1.5 pr-8 border rounded-lg font-mono text-xs disabled:bg-slate-100"
+                              className="w-full px-3 py-1.5 pr-8 border rounded-lg font-mono text-xs disabled:bg-slate-100 dark:disabled:bg-slate-800"
                             />
                             <button
                               type="button"
                               disabled={smtpClearPassword || (!smtpHasPassword && smtpPassword === '')}
                               onClick={() => setSmtpShowPwd((v) => !v)}
-                              title={smtpShowPwd ? '隐藏授权码' : '查看授权码'}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 disabled:opacity-30"
+                              title={smtpShowPwd ? t('settings.smtpHidePwd') : t('settings.smtpShowPwd')}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30"
                             >
                               {smtpShowPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                             </button>
@@ -744,24 +774,24 @@ export const SettingsPage: React.FC = () => {
                             type="button"
                             disabled={smtpClearPassword || (!smtpSavedPassword && smtpPassword === '')}
                             onClick={copySmtpPassword}
-                            title="复制 SMTP 密码/授权码"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-40 rounded-lg text-xs text-slate-700 shrink-0"
+                            title={t('settings.smtpCopyPwdTitle')}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 rounded-lg text-xs text-slate-700 dark:text-slate-200 shrink-0"
                           >
                             {smtpPwdCopied ? (
                               <>
-                                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                                <span className="text-emerald-700">已复制</span>
+                                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                <span className="text-emerald-700 dark:text-emerald-300">{t('common.copied')}</span>
                               </>
                             ) : (
                               <>
                                 <Copy className="w-3.5 h-3.5" />
-                                <span>复制</span>
+                                <span>{t('common.copy')}</span>
                               </>
                             )}
                           </button>
                         </div>
                         {smtpHasPassword && (
-                          <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
+                          <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 mt-1">
                             <input
                               type="checkbox"
                               checked={smtpClearPassword}
@@ -772,13 +802,14 @@ export const SettingsPage: React.FC = () => {
                                 setSmtpShowPwd(false)
                               }}
                             />
-                            <span>清除已有 SMTP 密码</span>
+                            <span>{t('settings.smtpClearPwd')}</span>
                           </label>
                         )}
                       </div>
                       <div>
-                        <label htmlFor="settings-field-12" className="block text-xs text-slate-600 mb-1">发件人名称</label>
-                        <input id="settings-field-12"
+                        <label htmlFor="settings-field-12" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpFromName')}</label>
+                        <input
+                          id="settings-field-12"
                           value={smtpFromName}
                           onChange={(e) => setSmtpFromName(e.target.value)}
                           placeholder="SafeKeep"
@@ -786,17 +817,19 @@ export const SettingsPage: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <label htmlFor="settings-field-13" className="block text-xs text-slate-600 mb-1">发件人邮箱（支持 `名称 &lt;邮箱&gt;`）</label>
-                        <input id="settings-field-13"
+                        <label htmlFor="settings-field-13" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpFromEmail')}</label>
+                        <input
+                          id="settings-field-13"
                           value={smtpFromEmail}
                           onChange={(e) => setSmtpFromEmail(e.target.value)}
-                          placeholder="alerts@example.com 或 SafeKeep <alerts@example.com>"
+                          placeholder={t('settings.smtpFromEmailPlaceholder')}
                           className="w-full px-3 py-1.5 border rounded-lg"
                         />
                       </div>
                       <div>
-                        <label htmlFor="settings-field-14" className="block text-xs text-slate-600 mb-1">告警收件人邮箱（多个用逗号、分号或换行分隔）</label>
-                        <input id="settings-field-14"
+                        <label htmlFor="settings-field-14" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpToEmails')}</label>
+                        <input
+                          id="settings-field-14"
                           value={smtpToEmails}
                           onChange={(e) => setSmtpToEmails(e.target.value)}
                           placeholder="ops@example.com, admin@example.com"
@@ -804,10 +837,11 @@ export const SettingsPage: React.FC = () => {
                         />
                       </div>
                     </div>
+
                     {smtpTesting && (
-                      <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 text-xs flex items-center gap-2">
-                        <Loader2 className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
-                        <span>正在连接 SMTP 服务器并发送测试邮件（超时 5 秒），请稍候...</span>
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <span>{t('settings.smtpTesting')}</span>
                       </div>
                     )}
 
@@ -815,37 +849,37 @@ export const SettingsPage: React.FC = () => {
                       <div
                         className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${
                           smtpTestResult.ok
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                            : 'bg-rose-50 border-rose-200 text-rose-800'
+                            ? 'bg-emerald-50 dark:bg-emerald-500/15 border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200'
+                            : 'bg-rose-50 dark:bg-rose-500/15 border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200'
                         }`}
                       >
                         {smtpTestResult.ok ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                         ) : (
-                          <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                          <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="font-medium break-all">{smtpTestResult.message}</div>
-                          <div className="opacity-75 mt-0.5">检测时间：{smtpTestResult.time}</div>
+                          <div className="opacity-75 mt-0.5">{t('settings.smtpTestTime', { time: smtpTestResult.time })}</div>
                         </div>
                       </div>
                     )}
 
-                    <div className="flex justify-end gap-2 pt-2 border-t">
+                    <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                       <button
                         type="button"
                         onClick={testSMTP}
                         disabled={smtpTesting || savingSmtp}
-                        className="px-4 py-2 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 rounded-lg text-sm"
+                        className="px-4 py-2 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 rounded-lg text-sm"
                       >
-                        {smtpTesting ? '发送中...' : '发送测试邮件'}
+                        {smtpTesting ? t('settings.smtpSending') : t('settings.smtpSendTest')}
                       </button>
                       <button
                         type="submit"
                         disabled={savingSmtp || !smtpDirty}
                         className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-opacity"
                       >
-                        {savingSmtp ? '保存中...' : smtpDirty ? '保存 SMTP 配置' : '已保存'}
+                        {savingSmtp ? t('common.saving') : smtpDirty ? t('settings.smtpSaveBtn') : t('common.saved')}
                       </button>
                     </div>
                   </form>
@@ -853,56 +887,56 @@ export const SettingsPage: React.FC = () => {
               )}
 
               {subTab === 'admins' && (
-                <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
                   <div>
-                    <h2 className="font-semibold text-slate-900">管理员账号管理</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">管理可登录 Web 管理端的管理员账号、重置密码及启停状态</p>
+                    <h2 className="font-semibold text-slate-900 dark:text-slate-100">{t('settings.adminsTitle')}</h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t('settings.adminsDesc')}</p>
                   </div>
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       {admins.map((a) => (
-                        <div key={a.id} className="flex flex-wrap gap-3 items-center justify-between p-3 bg-slate-50 rounded-lg text-sm border border-slate-100">
+                        <div key={a.id} className="flex flex-wrap gap-3 items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg text-sm border border-slate-100 dark:border-slate-800">
                           <div>
-                            <div className="font-medium text-slate-900">{a.username}</div>
-                            <div className="text-xs text-slate-400">最近登录: {formatTime(a.last_login_at)}</div>
+                            <div className="font-medium text-slate-900 dark:text-slate-100">{a.username}</div>
+                            <div className="text-xs text-slate-400">{t('settings.lastLogin', { time: formatTime(a.last_login_at, lang) })}</div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <StatusBadge value={a.is_active ? 'enabled' : 'disabled'} label={a.is_active ? '启用' : '禁用'} />
+                            <StatusBadge value={a.is_active ? 'enabled' : 'disabled'} label={a.is_active ? t('common.enable') : t('common.disable')} />
                             <button
                               onClick={() => { setResetAdmin(a); setResetPassword('') }}
-                              className="text-xs text-slate-600 hover:underline"
+                              className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
                             >
-                              重置密码
+                              {t('settings.resetPassword')}
                             </button>
                             <button
                               onClick={async () => {
-                                if (a.is_active && !confirm(`确定禁用管理员「${a.username}」吗？`)) return
+                                if (a.is_active && !confirm(t('settings.disableAdminConfirm', { name: a.username }))) return
                                 try {
                                   await api.updateAdmin(a.id, { is_active: !a.is_active })
-                                  toast.success(`已${a.is_active ? '禁用' : '启用'}管理员 "${a.username}"`)
+                                  toast.success(t('settings.toggledAdminToast', { action: a.is_active ? t('common.disable') : t('common.enable'), name: a.username }))
                                   const res = await api.listAdmins()
                                   setAdmins(res.items || [])
                                 } catch (e: any) {
-                                  toast.error(e.message || '更新管理员状态失败')
+                                  toast.error(e.message || t('settings.updateAdminError'))
                                 }
                               }}
-                              className="text-xs text-indigo-600 hover:underline"
+                              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
                             >
-                              {a.is_active ? '禁用' : '启用'}
+                              {a.is_active ? t('common.disable') : t('common.enable')}
                             </button>
                           </div>
                         </div>
                       ))}
                     </div>
                     <div className="space-y-4">
-                      <form onSubmit={handleCreateAdmin} className="space-y-2.5 text-sm border rounded-xl p-4">
-                        <div className="font-medium text-slate-800">新增管理员</div>
+                      <form onSubmit={handleCreateAdmin} className="space-y-2.5 text-sm border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+                        <div className="font-medium text-slate-800 dark:text-slate-100">{t('settings.addAdminTitle')}</div>
                         <input
                           required
                           minLength={3}
-                          aria-label="新管理员用户名"
+                          aria-label={t('settings.newAdminUserAria')}
                           autoComplete="off"
-                          placeholder="用户名"
+                          placeholder={t('auth.username')}
                           value={newAdminUser}
                           onChange={(e) => setNewAdminUser(e.target.value)}
                           className="w-full px-3 py-1.5 border rounded-lg"
@@ -911,9 +945,9 @@ export const SettingsPage: React.FC = () => {
                           type="password"
                           required
                           minLength={8}
-                          aria-label="新管理员密码"
+                          aria-label={t('settings.newAdminPassAria')}
                           autoComplete="new-password"
-                          placeholder="密码（>=8位）"
+                          placeholder={t('settings.passwordGe8')}
                           value={newAdminPass}
                           onChange={(e) => setNewAdminPass(e.target.value)}
                           className="w-full px-3 py-1.5 border rounded-lg"
@@ -923,17 +957,17 @@ export const SettingsPage: React.FC = () => {
                           disabled={creatingAdmin || newAdminUser.trim().length < 3 || newAdminPass.length < 8}
                           className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium"
                         >
-                          {creatingAdmin ? '添加中...' : '添加管理员'}
+                          {creatingAdmin ? t('settings.addingAdmin') : t('settings.addAdminBtn')}
                         </button>
                       </form>
-                      <form onSubmit={handleChangeOwnPassword} className="space-y-2.5 text-sm border rounded-xl p-4">
-                        <div className="font-medium text-slate-800">修改当前登录密码</div>
+                      <form onSubmit={handleChangeOwnPassword} className="space-y-2.5 text-sm border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+                        <div className="font-medium text-slate-800 dark:text-slate-100">{t('settings.changeOwnPwdTitle')}</div>
                         <input
                           type="password"
                           required
-                          aria-label="当前密码"
+                          aria-label={t('settings.currentPwd')}
                           autoComplete="current-password"
-                          placeholder="当前密码"
+                          placeholder={t('settings.currentPwd')}
                           value={oldPwd}
                           onChange={(e) => setOldPwd(e.target.value)}
                           className="w-full px-3 py-1.5 border rounded-lg"
@@ -942,9 +976,9 @@ export const SettingsPage: React.FC = () => {
                           type="password"
                           required
                           minLength={8}
-                          aria-label="新密码"
+                          aria-label={t('settings.newPwd')}
                           autoComplete="new-password"
-                          placeholder="新密码（>=8位）"
+                          placeholder={t('settings.newPwdGe8')}
                           value={newPwd}
                           onChange={(e) => setNewPwd(e.target.value)}
                           className="w-full px-3 py-1.5 border rounded-lg"
@@ -952,9 +986,9 @@ export const SettingsPage: React.FC = () => {
                         <button
                           type="submit"
                           disabled={changingOwnPwd || !oldPwd || newPwd.length < 8}
-                          className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium"
+                          className="px-4 py-1.5 bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-500 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium"
                         >
-                          {changingOwnPwd ? '更新中...' : '更新密码'}
+                          {changingOwnPwd ? t('settings.updatingPwd') : t('settings.updatePwdBtn')}
                         </button>
                       </form>
                     </div>
@@ -965,30 +999,57 @@ export const SettingsPage: React.FC = () => {
           )}
         </section>
       </div>
-      {resetAdmin && <Modal title="重置管理员密码" onClose={() => setResetAdmin(null)} busy={resettingPassword} size="md">
-        <div className="bg-white rounded-2xl p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-slate-900">重置管理员密码</h2>
-          <p className="text-sm text-slate-500">为「{resetAdmin.username}」设置新密码，保存后立即生效。</p>
-          <form className="space-y-4" onSubmit={async (event) => {
-            event.preventDefault()
-            if (resettingPassword || resetPassword.length < 8) return
-            setResettingPassword(true)
-            try {
-              await api.updateAdmin(resetAdmin.id, { password: resetPassword })
-              setResetAdmin(null)
-              setResetPassword('')
-              toast.success('管理员密码已重置')
-            } catch (e: any) {
-              toast.error(e.message || '重置密码失败')
-            } finally {
-              setResettingPassword(false)
-            }
-          }}>
-            <div><label htmlFor="admin-reset-password" className="block text-xs text-slate-600 mb-2">新密码（至少 8 位）</label><input id="admin-reset-password" type="password" autoComplete="new-password" minLength={8} required value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
-            <div className="flex justify-end gap-2 border-t pt-4"><button type="button" disabled={resettingPassword} onClick={() => setResetAdmin(null)} className="px-4 py-2 border rounded-lg text-sm">取消</button><button type="submit" disabled={resettingPassword || resetPassword.length < 8} className="primary-button disabled:opacity-40">{resettingPassword ? '保存中…' : '确认重置'}</button></div>
-          </form>
-        </div>
-      </Modal>}
+
+      {resetAdmin && (
+        <Modal title={t('settings.resetModalTitle')} onClose={() => setResetAdmin(null)} busy={resettingPassword} size="md">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 space-y-4">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{t('settings.resetModalTitle')}</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">{t('settings.resetModalDesc', { name: resetAdmin.username })}</p>
+            <form
+              className="space-y-4"
+              onSubmit={async (event) => {
+                event.preventDefault()
+                if (resettingPassword || resetPassword.length < 8) return
+                setResettingPassword(true)
+                try {
+                  await api.updateAdmin(resetAdmin.id, { password: resetPassword })
+                  setResetAdmin(null)
+                  setResetPassword('')
+                  toast.success(t('settings.resetSuccessToast'))
+                } catch (e: any) {
+                  toast.error(e.message || t('settings.resetErrorToast'))
+                } finally {
+                  setResettingPassword(false)
+                }
+              }}
+            >
+              <div>
+                <label htmlFor="admin-reset-password" className="block text-xs text-slate-600 dark:text-slate-300 mb-2">
+                  {t('settings.resetModalLabel')}
+                </label>
+                <input
+                  id="admin-reset-password"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  required
+                  value={resetPassword}
+                  onChange={(event) => setResetPassword(event.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-200 dark:border-slate-800 pt-4">
+                <button type="button" disabled={resettingPassword} onClick={() => setResetAdmin(null)} className="px-4 py-2 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-sm">
+                  {t('common.cancel')}
+                </button>
+                <button type="submit" disabled={resettingPassword || resetPassword.length < 8} className="primary-button disabled:opacity-40">
+                  {resettingPassword ? t('common.saving') : t('settings.resetConfirmBtn')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

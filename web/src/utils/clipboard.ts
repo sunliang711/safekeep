@@ -1,3 +1,5 @@
+import { getCurrentLang, translate } from '../contexts/I18nContext'
+
 // Clipboard API may fail or be unavailable on plain HTTP LAN pages; fallback to execCommand copy.
 export async function copyText(text: string): Promise<void> {
   try {
@@ -19,7 +21,7 @@ export async function copyText(text: string): Promise<void> {
     input.select()
     input.setSelectionRange(0, text.length)
     if (!document.execCommand('copy')) {
-      throw new Error('复制失败：浏览器不支持剪贴板写入')
+      throw new Error(translate(getCurrentLang(), 'clipboard.unsupported'))
     }
   } finally {
     input.remove()

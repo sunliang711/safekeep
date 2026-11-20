@@ -6,6 +6,7 @@ import { SecretField } from '../components/SecretField'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
+import { useI18n } from '../contexts/I18nContext'
 import { copyText } from '../utils/clipboard'
 import type { Client, Upstream } from '../types'
 
@@ -27,6 +28,7 @@ interface ClientForm {
 
 export const ClientsPage: React.FC = () => {
   const toast = useToast()
+  const { t, lang } = useI18n()
   const [clients, setClients] = useState<Client[]>([])
   const [upstreams, setUpstreams] = useState<Upstream[]>([])
   const [loading, setLoading] = useState(true)
@@ -50,7 +52,7 @@ export const ClientsPage: React.FC = () => {
       setClients(cRes.items || [])
       setUpstreams(uRes.items || [])
     } catch (err: any) {
-      toast.error(err.message || '加载客户列表失败')
+      toast.error(err.message || t('clients.loadError'))
     } finally {
       setLoading(false)
     }
@@ -122,7 +124,7 @@ export const ClientsPage: React.FC = () => {
   }
 
   const closeModal = () => {
-    if (JSON.stringify(form) !== initialFormSnap && !confirm('客户配置尚未保存，确定放弃修改吗？')) return
+    if (JSON.stringify(form) !== initialFormSnap && !confirm(t('clients.discardConfirm'))) return
     setModalOpen(false)
   }
 
@@ -162,11 +164,11 @@ export const ClientsPage: React.FC = () => {
     try {
       if (form.id) {
         await api.updateClient(form.id, payload)
-        toast.success(`客户 "${form.name}" 配置已保存`)
+        toast.success(t('clients.savedToast', { name: form.name }))
       } else {
         const res = await api.createClient(payload)
         setRevealedKey({ key: res.api_key, clientName: form.name, isNew: true })
-        toast.success(`客户 "${form.name}" 已创建`)
+        toast.success(t('clients.createdToast', { name: form.name }))
       }
       setModalOpen(false)
       await load()
@@ -180,30 +182,30 @@ export const ClientsPage: React.FC = () => {
   const handleRevealKey = async (c: Client) => {
     if (revealingKeyId) return
     if (c.has_api_key === false) {
-      toast.info(`客户 "${c.name}" 创建于旧版本，未保存可解密的 API Key，请点击「轮换 Key」生成新 Key 后即可反复查看。`)
+      toast.info(t('clients.legacyKeyInfo', { name: c.name }))
       return
     }
     setRevealingKeyId(c.id)
     try {
       const res = await api.revealClientSecrets(c.id)
       if (!res.api_key) {
-        toast.info(`客户 "${c.name}" 当前无可查看的 API Key，请点击「轮换 Key」重新生成。`)
+        toast.info(t('clients.noKeyInfo', { name: c.name }))
         return
       }
       setRevealedKey({ key: res.api_key, clientName: c.name })
     } catch (err: any) {
-      toast.error(err.message || '获取 API Key 失败')
+      toast.error(err.message || t('clients.revealError'))
     } finally {
       setRevealingKeyId(null)
     }
   }
 
   const handleRotate = async (c: Client) => {
-    if (!confirm(`确定轮换客户 "${c.name}" 的 API Key 吗？旧 Key 将立即失效。`)) return
+    if (!confirm(t('clients.rotateConfirm', { name: c.name }))) return
     try {
       const res = await api.rotateClientKey(c.id)
       setRevealedKey({ key: res.api_key, clientName: c.name, isNew: true })
-      toast.success(`已为 "${c.name}" 生成新 API Key`)
+      toast.success(t('clients.rotatedToast', { name: c.name }))
       await load()
     } catch (err: any) {
       toast.error(err.message)
@@ -211,10 +213,10 @@ export const ClientsPage: React.FC = () => {
   }
 
   const handleDelete = async (c: Client) => {
-    if (!confirm(`确定删除客户 "${c.name}"？关联的备份任务记录也会被清除。`)) return
+    if (!confirm(t('clients.deleteConfirm', { name: c.name }))) return
     try {
       await api.deleteClient(c.id)
-      toast.success(`已删除客户 "${c.name}"`)
+      toast.success(t('clients.deletedToast', { name: c.name }))
       await load()
     } catch (err: any) {
       toast.error(err.message)
@@ -225,14 +227,14 @@ export const ClientsPage: React.FC = () => {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">客户与 API Key 管理</h1>
-          <p className="text-sm text-slate-500">为不同客户分配独立 API Key，绑定默认上游策略组与允许子集</p>
+          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('clients.title')}</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">{t('clients.subtitle')}</p>
         </div>
         <button
           onClick={openNew}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
         >
-          <Plus className="w-4 h-4" /> 创建客户 & Key
+          <Plus className="w-4 h-4" /> {t('clients.createBtn')}
         </button>
       </div>
 
@@ -245,52 +247,52 @@ export const ClientsPage: React.FC = () => {
             setCopiedId(id)
             setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1500)
           } catch (e: any) {
-            toast.error(e.message || '复制失败')
+            toast.error(e.message || t('common.copyFailed'))
           }
         }
         const examples = [
           {
             id: 'sync-upload' as const,
-            label: '1. 同步上传',
-            title: '同步上传（mode=sync，等待结果；超时自动转后台）',
-            desc: '适合中小文件或需要立即确认备份结果的场景；默认直接使用原文件名，如需重命名可传 rename=new-name.tar.gz。超过系统同步超时时间后自动转为后台异步执行并返回 202。',
+            label: t('clients.ex1.label'),
+            title: t('clients.ex1.title'),
+            desc: t('clients.ex1.desc'),
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=daily" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -F "file=@./backup.tar.gz"`,
           },
           {
             id: 'async-upload' as const,
-            label: '2. 异步上传',
-            title: '异步上传并指定目标上游（省略 mode 则使用客户默认传输模式）',
-            desc: '流式落盘后立即返回 202 Accepted 与 task_id；可通过 targets 指定该客户已绑定上游的子集。',
+            label: t('clients.ex2.label'),
+            title: t('clients.ex2.title'),
+            desc: t('clients.ex2.desc'),
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=async&targets=prod-s3,dropbox" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -F "file=@./archive.zip" \\\n  -F 'metadata={"env":"prod","source":"cron"}'`,
           },
           {
             id: 'raw-stream' as const,
-            label: '3. 原始二进制流上传',
-            title: '原始二进制流上传（非 multipart，通过 Header 指定文件名）',
-            desc: '直接将文件内容作为请求体流式上传，使用 X-File-Name 传递原文件名（也可用 X-Backup-Mode / X-Backup-Path / X-Backup-Rename 请求头）。',
+            label: t('clients.ex3.label'),
+            title: t('clients.ex3.title'),
+            desc: t('clients.ex3.desc'),
             cmd: `curl -X POST "${baseUrl}/api/v1/backups?mode=sync&path=logs" \\\n  -H "X-API-Key: ${sampleKey}" \\\n  -H "X-File-Name: app.log" \\\n  --data-binary @./app.log`,
           },
           {
             id: 'query-download' as const,
-            label: '4. 查询与下载恢复',
-            title: '查询任务列表 / 任务详情 / 下载恢复 / 查看可用上游',
-            desc: '按客户 API Key 隔离查询自身任务记录与上游绑定列表，并可直接通过网关回源下载恢复文件。',
-            cmd: `# 查询当前客户的任务列表\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups?limit=20"\n\n# 查询单个任务状态\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups/<task_id>"\n\n# 下载恢复文件（可选 ?upstream_id=... 指定回源上游）\ncurl -H "X-API-Key: ${sampleKey}" -o restored.bin "${baseUrl}/api/v1/backups/<task_id>/download"\n\n# 查看当前 Key 绑定的可用上游\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/upstreams"`,
+            label: t('clients.ex4.label'),
+            title: t('clients.ex4.title'),
+            desc: t('clients.ex4.desc'),
+            cmd: `${t('clients.ex4.commentList')}\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups?limit=20"\n\n${t('clients.ex4.commentOne')}\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/backups/<task_id>"\n\n${t('clients.ex4.commentDownload')}\ncurl -H "X-API-Key: ${sampleKey}" -o restored.bin "${baseUrl}/api/v1/backups/<task_id>/download"\n\n${t('clients.ex4.commentUpstreams')}\ncurl -H "X-API-Key: ${sampleKey}" "${baseUrl}/api/v1/upstreams"`,
           },
         ]
         const activeExample = examples.find((ex) => ex.id === guideTab) || examples[0]
 
         return (
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
             <button
               type="button"
               onClick={() => setGuideOpen((v) => !v)}
-              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-50 transition-colors"
+              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
             >
-              <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-indigo-600" />
-                <span className="text-sm font-semibold text-slate-800">API Key 调用说明（curl 示例）</span>
-                <span className="text-xs text-slate-400">支持同步 / 异步上传、流式上传、查询与下载恢复</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Terminal className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">{t('clients.guideTitle')}</span>
+                <span className="text-xs text-slate-400">{t('clients.guideSubtitle')}</span>
               </div>
               {guideOpen ? (
                 <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
@@ -300,24 +302,32 @@ export const ClientsPage: React.FC = () => {
             </button>
 
             {guideOpen && (
-              <div className="px-4 pb-4 pt-3 border-t border-slate-100 space-y-3 text-xs">
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 space-y-1">
+              <div className="px-4 pb-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3 text-xs">
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 space-y-1">
                   <div>
-                    <span className="font-semibold text-slate-800">鉴权方式：</span>
-                    请求头传 <code className="px-1 py-0.5 bg-white border rounded font-mono">X-API-Key: sk_...</code> 或{' '}
-                    <code className="px-1 py-0.5 bg-white border rounded font-mono">Authorization: Bearer sk_...</code>。
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">{t('clients.guideAuthLabel')}</span>
+                    {t('clients.guideAuthText1')}
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">X-API-Key: sk_...</code>
+                    {t('clients.guideAuthText2')}
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">Authorization: Bearer sk_...</code>.
                   </div>
                   <div>
-                    <span className="font-semibold text-slate-800">常用参数：</span>
-                    <code className="px-1 py-0.5 bg-white border rounded font-mono">mode=sync|async</code>（不传时使用客户的“默认传输模式”）、
-                    <code className="px-1 py-0.5 bg-white border rounded font-mono">targets</code>（逗号分隔的上游名称或 ID，需在绑定列表内；留空走默认上游组）、
-                    <code className="px-1 py-0.5 bg-white border rounded font-mono">path</code>（相对子目录）、
-                    <code className="px-1 py-0.5 bg-white border rounded font-mono">rename</code> / <code className="px-1 py-0.5 bg-white border rounded font-mono">X-Backup-Rename</code>（可选，重命名远端保存文件名；默认使用原文件名）、
-                    <code className="px-1 py-0.5 bg-white border rounded font-mono">dedup=false</code>（跳过 SHA-256 秒传去重）。
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">{t('clients.guideParamsLabel')}</span>
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">mode=sync|async</code>
+                    {t('clients.guideParamsMode')}
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">targets</code>
+                    {t('clients.guideParamsTargets')}
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">path</code>
+                    {t('clients.guideParamsPath')}
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">rename</code> /{' '}
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">X-Backup-Rename</code>
+                    {t('clients.guideParamsRename')}
+                    <code className="px-1 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono">dedup=false</code>
+                    {t('clients.guideParamsDedup')}
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5 border-b border-slate-200 pb-2">
+                <div className="flex flex-wrap gap-1.5 border-b border-slate-200 dark:border-slate-800 pb-2">
                   {examples.map((ex) => {
                     const active = ex.id === activeExample.id
                     return (
@@ -328,7 +338,7 @@ export const ClientsPage: React.FC = () => {
                         className={`px-3 py-1.5 rounded-lg font-medium transition ${
                           active
                             ? 'bg-indigo-600 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white'
                         }`}
                       >
                         {ex.label}
@@ -338,9 +348,9 @@ export const ClientsPage: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-slate-600">{activeExample.desc}</div>
-                  <div className="border border-slate-200 rounded-lg overflow-hidden bg-slate-900 text-slate-100">
-                    <div className="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700">
+                  <div className="text-slate-600 dark:text-slate-300">{activeExample.desc}</div>
+                  <div className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden bg-slate-900 dark:bg-slate-950 text-slate-100">
+                    <div className="flex items-center justify-between px-3 py-2 bg-slate-800 dark:bg-slate-900 border-b border-slate-700">
                       <span className="text-[11px] font-medium text-slate-200">{activeExample.title}</span>
                       <button
                         type="button"
@@ -350,12 +360,12 @@ export const ClientsPage: React.FC = () => {
                         {copiedId === activeExample.id ? (
                           <>
                             <Check className="w-3 h-3 text-emerald-400" />
-                            <span>已复制</span>
+                            <span>{t('common.copied')}</span>
                           </>
                         ) : (
                           <>
                             <Copy className="w-3 h-3" />
-                            <span>复制</span>
+                            <span>{t('common.copy')}</span>
                           </>
                         )}
                       </button>
@@ -370,32 +380,32 @@ export const ClientsPage: React.FC = () => {
       })()}
 
       {loading ? (
-        <LoadingState label="正在读取客户策略…" />
+        <LoadingState label={t('clients.loading')} />
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-x-auto">
           <table className="clients-table w-full text-sm">
-            <thead className="bg-slate-50 text-xs text-slate-500 border-b">
+            <thead className="bg-slate-50 dark:bg-slate-950/60 text-xs text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
               <tr>
-                <th className="text-left px-4 py-3">客户名称</th>
-                <th className="text-left px-4 py-3">Key 前缀</th>
-                <th className="text-left px-4 py-3">默认模式 / 前缀</th>
-                <th className="text-left px-4 py-3">绑定上游</th>
-                <th className="text-left px-4 py-3">配额 / 限流</th>
-                <th className="text-left px-4 py-3">状态 / 最近使用</th>
-                <th className="text-right px-4 py-3">操作</th>
+                <th className="text-left px-4 py-3">{t('clients.colName')}</th>
+                <th className="text-left px-4 py-3">{t('clients.colKeyPrefix')}</th>
+                <th className="text-left px-4 py-3">{t('clients.colModePrefix')}</th>
+                <th className="text-left px-4 py-3">{t('clients.colUpstreams')}</th>
+                <th className="text-left px-4 py-3">{t('clients.colQuota')}</th>
+                <th className="text-left px-4 py-3">{t('clients.colStatus')}</th>
+                <th className="text-right px-4 py-3">{t('clients.colActions')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {clients.map((c) => (
                 <tr key={c.id}>
                   <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900">{c.name}</div>
+                    <div className="font-medium text-slate-900 dark:text-slate-100">{c.name}</div>
                     {c.description && <div className="text-xs text-slate-400">{c.description}</div>}
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-700">{c.key_prefix}...</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{c.key_prefix}...</td>
                   <td className="px-4 py-3">
                     <StatusBadge value={c.default_mode} />
-                    {c.path_prefix && <div className="text-xs text-slate-500 font-mono mt-1">/{c.path_prefix}</div>}
+                    {c.path_prefix && <div className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-1">/{c.path_prefix}</div>}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
@@ -404,39 +414,39 @@ export const ClientsPage: React.FC = () => {
                           key={u.upstream_id}
                           className={`text-xs px-2 py-0.5 rounded border ${
                             u.is_default
-                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                              ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30'
+                              : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                           }`}
                         >
-                          {u.upstream_name} {u.is_default ? '(默认)' : '(可选)'}
+                          {u.upstream_name} {u.is_default ? t('clients.tagDefault') : t('clients.tagOptional')}
                         </span>
                       ))}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-600">
-                    <div>单文件: {c.max_file_size_bytes > 0 ? formatBytes(c.max_file_size_bytes) : '全局默认'}</div>
-                    <div>限流: {c.rate_limit_rpm > 0 ? `${c.rate_limit_rpm} req/m` : '不限'}</div>
+                  <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">
+                    <div>{t('clients.quotaMaxFile')}: {c.max_file_size_bytes > 0 ? formatBytes(c.max_file_size_bytes) : t('common.globalDefault')}</div>
+                    <div>{t('clients.quotaRateLimit')}: {c.rate_limit_rpm > 0 ? `${c.rate_limit_rpm} req/m` : t('common.unlimited')}</div>
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge value={c.enabled ? 'enabled' : 'disabled'} label={c.enabled ? '启用' : '禁用'} />
-                    <div className="text-[11px] text-slate-400 mt-1">{formatTime(c.last_used_at)}</div>
+                    <StatusBadge value={c.enabled ? 'enabled' : 'disabled'} label={c.enabled ? t('common.enable') : t('common.disable')} />
+                    <div className="text-[11px] text-slate-400 mt-1">{formatTime(c.last_used_at, lang)}</div>
                   </td>
                   <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
                     <button
                       type="button"
                       disabled={revealingKeyId === c.id}
                       onClick={() => handleRevealKey(c)}
-                      className="text-xs text-slate-700 hover:text-indigo-600 hover:underline inline-flex items-center gap-0.5 disabled:opacity-50"
+                      className="text-xs text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline inline-flex items-center gap-0.5 disabled:opacity-50"
                     >
-                      <Eye className="w-3 h-3" /> {revealingKeyId === c.id ? '读取中…' : '查看 Key'}
+                      <Eye className="w-3 h-3" /> {revealingKeyId === c.id ? t('clients.readingKey') : t('clients.viewKey')}
                     </button>
-                    <button type="button" onClick={() => openEdit(c)} className="text-xs text-indigo-600 hover:underline">
-                      编辑
+                    <button type="button" onClick={() => openEdit(c)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
+                      {t('common.edit')}
                     </button>
-                    <button type="button" onClick={() => handleRotate(c)} className="text-xs text-amber-600 hover:underline inline-flex items-center gap-0.5">
-                      <RefreshCw className="w-3 h-3" /> 轮换 Key
+                    <button type="button" onClick={() => handleRotate(c)} className="text-xs text-amber-600 dark:text-amber-400 hover:underline inline-flex items-center gap-0.5">
+                      <RefreshCw className="w-3 h-3" /> {t('clients.rotateKey')}
                     </button>
-                    <button type="button" aria-label={`删除客户 ${c.name}`} onClick={() => handleDelete(c)} className="text-xs text-rose-600 hover:underline inline-flex items-center">
+                    <button type="button" aria-label={t('clients.deleteAria', { name: c.name })} onClick={() => handleDelete(c)} className="text-xs text-rose-600 dark:text-rose-400 hover:underline inline-flex items-center">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
@@ -445,7 +455,11 @@ export const ClientsPage: React.FC = () => {
               {clients.length === 0 && (
                 <tr>
                   <td colSpan={7} className="text-center">
-                    <EmptyState title="为你的应用创建访问凭证" description="为不同客户设置独立的备份策略、存储范围和 API Key。" action={<button className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />创建客户与 API Key</button>} />
+                    <EmptyState
+                      title={t('clients.emptyTitle')}
+                      description={t('clients.emptyDesc')}
+                      action={<button className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />{t('clients.emptyAction')}</button>}
+                    />
                   </td>
                 </tr>
               )}
@@ -455,45 +469,53 @@ export const ClientsPage: React.FC = () => {
       )}
 
       {modalOpen && form && (
-        <Modal title={form.id ? '编辑客户配置' : '创建客户与 API Key'} onClose={closeModal} busy={saving}>
-          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
-            <h2 className="text-lg font-bold text-slate-900 mb-4">{form.id ? '编辑客户配置' : '创建客户与 API Key'}</h2>
-            {error && <div className="mb-3 p-2.5 bg-rose-50 text-rose-700 text-xs rounded-lg">{error}</div>}
+        <Modal title={form.id ? t('clients.modalEditTitle') : t('clients.modalCreateTitle')} onClose={closeModal} busy={saving}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">
+              {form.id ? t('clients.modalEditTitle') : t('clients.modalCreateTitle')}
+            </h2>
+            {error && (
+              <div className="mb-3 p-2.5 bg-rose-50 dark:bg-rose-500/15 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs rounded-lg">
+                {error}
+              </div>
+            )}
             <form onSubmit={handleSave} className="space-y-4 text-sm">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="clients-field-1" className="block text-xs text-slate-600 mb-1">客户名称 *</label>
+                  <label htmlFor="clients-field-1" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldName')}</label>
                   <input id="clients-field-1" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-2" className="block text-xs text-slate-600 mb-1">默认传输模式</label>
-                  <select id="clients-field-2" value={form.default_mode} onChange={(e) => setForm({ ...form, default_mode: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white">
-                    <option value="async">async（异步队列，推荐）</option>
-                    <option value="sync">sync（同步等待，超时转后台）</option>
+                  <label htmlFor="clients-field-2" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldMode')}</label>
+                  <select id="clients-field-2" value={form.default_mode} onChange={(e) => setForm({ ...form, default_mode: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white dark:bg-slate-900">
+                    <option value="async">{t('clients.modeAsync')}</option>
+                    <option value="sync">{t('clients.modeSync')}</option>
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="clients-field-3" className="block text-xs text-slate-600 mb-1">租户隔离路径前缀</label>
+                  <label htmlFor="clients-field-3" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldPathPrefix')}</label>
                   <input id="clients-field-3" value={form.path_prefix} onChange={(e) => setForm({ ...form, path_prefix: e.target.value })} placeholder="tenant-acme" className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-4" className="block text-xs text-slate-600 mb-1">备注说明</label>
+                  <label htmlFor="clients-field-4" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldDesc')}</label>
                   <input id="clients-field-4" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-5" className="block text-xs text-slate-600 mb-1">单文件大小上限 MB（0=跟随全局）</label>
+                  <label htmlFor="clients-field-5" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldMaxFileMb')}</label>
                   <input id="clients-field-5" type="number" min={0} value={form.max_file_size_mb} onChange={(e) => setForm({ ...form, max_file_size_mb: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-6" className="block text-xs text-slate-600 mb-1">每分钟限流 RPM（0=不限）</label>
+                  <label htmlFor="clients-field-6" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldRateLimit')}</label>
                   <input id="clients-field-6" type="number" min={0} value={form.rate_limit_rpm} onChange={(e) => setForm({ ...form, rate_limit_rpm: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-7" className="block text-xs text-slate-600 mb-1">异步回调 Webhook URL</label>
+                  <label htmlFor="clients-field-7" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldWebhookUrl')}</label>
                   <input id="clients-field-7" value={form.webhook_url} onChange={(e) => setForm({ ...form, webhook_url: e.target.value })} placeholder="https://example.com/hook" className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-8" className="block text-xs text-slate-600 mb-1">Webhook 签名密钥 {form.id ? '（默认掩码 *****，点右侧可查看）' : ''}</label>
+                  <label htmlFor="clients-field-8" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                    {t('clients.fieldWebhookSecret')}{form.id ? t('upstreams.secretMaskHint') : ''}
+                  </label>
                   <SecretField
                     id="clients-field-8"
                     hasSaved={Boolean(form.id && editingHasWebhookSecret)}
@@ -503,17 +525,17 @@ export const ClientsPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-9" className="block text-xs text-slate-600 mb-1">允许的 MIME 类型（逗号分隔，空=不限）</label>
+                  <label htmlFor="clients-field-9" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldAllowedMimes')}</label>
                   <input id="clients-field-9" value={form.allowed_mime_types} onChange={(e) => setForm({ ...form, allowed_mime_types: e.target.value })} placeholder="image/*,application/pdf" className="w-full px-3 py-1.5 border rounded-lg font-mono text-xs" />
                 </div>
                 <div>
-                  <label htmlFor="clients-field-10" className="block text-xs text-slate-600 mb-1">API Key 过期时间（可选）</label>
+                  <label htmlFor="clients-field-10" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('clients.fieldExpiresAt')}</label>
                   <input id="clients-field-10" type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
                 </div>
                 {form.id && (
                   <div className="col-span-2">
-                    <label htmlFor="clients-field-api-key" className="block text-xs text-slate-600 mb-1">
-                      API Key（默认掩码 *****，点右侧可查看或复制；如需更换请使用列表中的「轮换 Key」）
+                    <label htmlFor="clients-field-api-key" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                      {t('clients.fieldApiKeyLabel')}
                     </label>
                     {editingHasAPIKey ? (
                       <SecretField
@@ -525,29 +547,33 @@ export const ClientsPage: React.FC = () => {
                         onReveal={async () => (await api.revealClientSecrets(form.id!)).api_key || ''}
                       />
                     ) : (
-                      <div className="px-3 py-1.5 rounded-lg border bg-slate-50 text-xs text-slate-500">
-                        该客户创建于旧版本，未保存可解密的 API Key 副本；请在列表点击「轮换 Key」生成新 Key。
+                      <div className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                        {t('clients.legacyKeyBox')}
                       </div>
                     )}
                   </div>
                 )}
               </div>
 
-              <label className="inline-flex items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-200">
                 <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-                <span>启用该客户</span>
+                <span>{t('clients.fieldEnabled')}</span>
               </label>
 
-              <div className="border-t pt-3">
-                <div className="font-semibold text-slate-800 mb-2">绑定上游存储策略（允许范围 & 默认扇出组）</div>
+              <div className="border-t border-slate-200 dark:border-slate-800 pt-3">
+                <div className="font-semibold text-slate-800 dark:text-slate-100 mb-2">{t('clients.bindUpstreamsTitle')}</div>
                 <div className="space-y-2">
-                  {form.upstreams.length === 0 && <div className="p-3 rounded-xl bg-amber-50 text-amber-800 text-xs leading-6">尚未添加上游存储。可先保存客户，再前往「上游存储与代理」添加存储并绑定，之后即可上传备份。</div>}
+                  {form.upstreams.length === 0 && (
+                    <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-amber-800 dark:text-amber-200 text-xs leading-6">
+                      {t('clients.noUpstreamsNotice')}
+                    </div>
+                  )}
                   {form.upstreams.map((uCfg, idx) => {
                     const meta = upstreams.find((x) => x.id === uCfg.upstream_id)
                     if (!meta) return null
                     return (
-                      <div key={meta.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border text-xs">
-                        <label className="flex items-center gap-2 font-medium">
+                      <div key={meta.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs">
+                        <label className="flex items-center gap-2 font-medium text-slate-800 dark:text-slate-100">
                           <input
                             type="checkbox"
                             checked={uCfg.enabled}
@@ -561,7 +587,7 @@ export const ClientsPage: React.FC = () => {
                           <span className="text-slate-400">({meta.type.toUpperCase()})</span>
                         </label>
                         {uCfg.enabled && (
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-4 text-slate-700 dark:text-slate-300">
                             <label className="flex items-center gap-1">
                               <input
                                 type="checkbox"
@@ -572,13 +598,13 @@ export const ClientsPage: React.FC = () => {
                                   setForm({ ...form, upstreams: next })
                                 }}
                               />
-                              <span>加入默认组</span>
+                              <span>{t('clients.joinDefaultGroup')}</span>
                             </label>
                             <label className="flex items-center gap-1">
-                              <span>回源优先级</span>
+                              <span>{t('clients.priority')}</span>
                               <input
                                 type="number"
-                                className="w-16 px-2 py-0.5 border rounded bg-white"
+                                className="w-16 px-2 py-0.5 border rounded bg-white dark:bg-slate-900"
                                 value={uCfg.priority}
                                 onChange={(e) => {
                                   const next = [...form.upstreams]
@@ -595,16 +621,16 @@ export const ClientsPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t">
-                <button type="button" disabled={saving} onClick={closeModal} className="px-4 py-2 rounded-lg border text-slate-600 disabled:opacity-50">
-                  取消
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button type="button" disabled={saving} onClick={closeModal} className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50">
+                  {t('common.cancel')}
                 </button>
                 <button
                   type="submit"
                   disabled={saving || (Boolean(form.id) && !clientDirty)}
                   className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white font-medium"
                 >
-                  {saving ? '保存中...' : form.id && !clientDirty ? '无改动' : '保存'}
+                  {saving ? t('common.saving') : form.id && !clientDirty ? t('common.noChanges') : t('common.save')}
                 </button>
               </div>
             </form>
@@ -613,37 +639,39 @@ export const ClientsPage: React.FC = () => {
       )}
 
       {revealedKey && (
-        <Modal title="查看 API Key" onClose={() => setRevealedKey(null)} size="md">
-          <div className="bg-white rounded-2xl w-full p-6 space-y-4">
-            <div className="flex items-center gap-2 text-indigo-700 font-semibold">
+        <Modal title={t('clients.revealModalTitle')} onClose={() => setRevealedKey(null)} size="md">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full p-6 space-y-4">
+            <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-400 font-semibold pr-8">
               <KeyRound className="w-5 h-5" />
-              <span>{revealedKey.isNew ? `已生成客户 "${revealedKey.clientName}" 的 API Key` : `客户 "${revealedKey.clientName}" 的 API Key`}</span>
+              <span>
+                {revealedKey.isNew
+                  ? t('clients.revealNewTitle', { name: revealedKey.clientName })
+                  : t('clients.revealExistingTitle', { name: revealedKey.clientName })}
+              </span>
             </div>
-            <p className="text-xs text-slate-500">
-              API Key 已使用服务端主密钥加密存储，之后可在客户列表点击「查看 Key」或在编辑客户页面中随时查看、复制。
-            </p>
-            <div className="flex items-center gap-2 bg-slate-900 text-emerald-400 p-3 rounded-lg font-mono text-xs break-all">
+            <p className="text-xs text-slate-500 dark:text-slate-400">{t('clients.revealDesc')}</p>
+            <div className="flex items-center gap-2 bg-slate-900 dark:bg-slate-950 border border-slate-800 text-emerald-400 p-3 rounded-lg font-mono text-xs break-all">
               <span className="flex-1 min-w-0 select-all">{revealedKey.key}</span>
               <button
                 type="button"
                 onClick={async () => {
                   try {
                     await copyText(revealedKey.key)
-                    toast.success('已复制 API Key')
+                    toast.success(t('clients.copiedApiKey'))
                   } catch (e: any) {
-                    toast.error(e.message || '复制失败')
+                    toast.error(e.message || t('common.copyFailed'))
                   }
                 }}
                 className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded text-white shrink-0"
-                title="复制"
-                aria-label="复制 API Key"
+                title={t('common.copy')}
+                aria-label={t('clients.copyApiKeyAria')}
               >
                 <Copy className="w-4 h-4" />
               </button>
             </div>
             <div className="flex justify-end">
               <button type="button" onClick={() => setRevealedKey(null)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm">
-                关闭
+                {t('common.close')}
               </button>
             </div>
           </div>

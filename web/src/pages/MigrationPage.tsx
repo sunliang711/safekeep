@@ -2,10 +2,12 @@ import React, { useState } from 'react'
 import { Download, ShieldAlert, Upload } from 'lucide-react'
 import { api, formatTime } from '../api'
 import { useToast } from '../components/Toast'
+import { useI18n } from '../contexts/I18nContext'
 import type { InspectSummary } from '../types'
 
 export const MigrationPage: React.FC = () => {
   const toast = useToast()
+  const { t, lang } = useI18n()
 
   // Migration Export
   const [expPass, setExpPass] = useState('')
@@ -29,7 +31,7 @@ export const MigrationPage: React.FC = () => {
   const handleExport = async (e: React.FormEvent) => {
     e.preventDefault()
     if (expPass !== '' && expPass.length < 6) {
-      toast.error('迁移口令若设置，需至少 6 位（或留空不设口令）')
+      toast.error(t('migration.exportPassError'))
       return
     }
     setExporting(true)
@@ -40,9 +42,9 @@ export const MigrationPage: React.FC = () => {
         include_audit_logs: expAudit,
         passphrase: expPass,
       })
-      toast.success('加密迁移包已生成并开始下载')
+      toast.success(t('migration.exportSuccess'))
     } catch (e: any) {
-      toast.error(e.message || '导出迁移包失败')
+      toast.error(e.message || t('migration.exportError'))
     } finally {
       setExporting(false)
     }
@@ -57,10 +59,10 @@ export const MigrationPage: React.FC = () => {
     try {
       const summary = await api.inspectMigration(fd)
       setInspectRes(summary)
-      toast.info('迁移包预检完成')
+      toast.info(t('migration.inspectDone'))
     } catch (e: any) {
       setInspectRes(null)
-      toast.error(e.message || '预检迁移包失败')
+      toast.error(e.message || t('migration.inspectError'))
     } finally {
       setInspecting(false)
     }
@@ -68,7 +70,7 @@ export const MigrationPage: React.FC = () => {
 
   const handleImport = async () => {
     if (!impFile || !inspectRes || importing) return
-    if (impMode === 'replace' && !confirm('确定使用「覆盖恢复」模式？当前环境的上游与客户配置将被清空替换为迁移包快照！')) {
+    if (impMode === 'replace' && !confirm(t('migration.replaceConfirm'))) {
       return
     }
     setImporting(true)
@@ -83,11 +85,16 @@ export const MigrationPage: React.FC = () => {
     try {
       const res = await api.importMigration(fd)
       toast.success(
-        `环境恢复成功！已导入上游 ${res.counts.upstreams} 个、客户 ${res.counts.clients} 个、定时任务 ${res.counts.cron_jobs} 个、历史任务 ${res.counts.backup_tasks} 条。`
+        t('migration.importSuccess', {
+          upstreams: res.counts.upstreams,
+          clients: res.counts.clients,
+          cron: res.counts.cron_jobs,
+          tasks: res.counts.backup_tasks,
+        })
       )
       setInspectRes(null)
     } catch (e: any) {
-      toast.error(e.message || '环境恢复失败')
+      toast.error(e.message || t('migration.importError'))
     } finally {
       setImporting(false)
     }
@@ -96,45 +103,52 @@ export const MigrationPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold text-slate-900">环境迁移与恢复</h1>
-        <p className="text-sm text-slate-500">
-          导出加密迁移包（.skbundle）快速迁移到新服务器或灾备节点，支持预检冲突与事务化恢复
-        </p>
+        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('migration.title')}</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400">{t('migration.subtitle')}</p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-4 text-xs text-indigo-800"><span className="font-semibold">迁移流程</span><span>01 生成加密迁移包</span><span aria-hidden="true">→</span><span>02 上传并预检</span><span aria-hidden="true">→</span><span>03 确认后恢复</span></div>
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 dark:border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-500/10 p-4 text-xs text-indigo-800 dark:text-indigo-200">
+        <span className="font-semibold">{t('migration.flowLabel')}</span>
+        <span>{t('migration.flowStep1')}</span>
+        <span aria-hidden="true">→</span>
+        <span>{t('migration.flowStep2')}</span>
+        <span aria-hidden="true">→</span>
+        <span>{t('migration.flowStep3')}</span>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-          <div className="flex items-center gap-2 font-semibold text-slate-900">
-            <Download className="w-4 h-4 text-indigo-600" />
-            <span>导出环境迁移包（.skbundle）</span>
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+          <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
+            <Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <span>{t('migration.exportTitle')}</span>
           </div>
-          <p className="text-xs text-slate-500">
-            所有上游密钥（S3 / R2 Secret、GCS 服务账号密钥、Dropbox Token）、SMTP 密码与代理密码将使用临时迁移口令重加密打包；客户 API Key 哈希保留，迁移后客户端无需更换密钥。
-          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{t('migration.exportDesc')}</p>
           <form onSubmit={handleExport} className="space-y-3 text-sm">
-            <div className="space-y-1.5 text-xs">
-              <div className="font-medium text-slate-700">必选包含：系统设置、上游存储与代理、客户与 API Key、定时任务配置</div>
+            <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300">
+              <div className="font-medium text-slate-700 dark:text-slate-200">{t('migration.exportRequiredNote')}</div>
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={expTasks} onChange={(e) => setExpTasks(e.target.checked)} />
-                <span>包含历史备份文件索引（导入后可继续检索与恢复下载旧文件）</span>
+                <span>{t('migration.exportIncludeTasks')}</span>
               </label>
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={expAdmins} onChange={(e) => setExpAdmins(e.target.checked)} />
-                <span>包含管理员账号</span>
+                <span>{t('migration.exportIncludeAdmins')}</span>
               </label>
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={expAudit} onChange={(e) => setExpAudit(e.target.checked)} />
-                <span>包含历史审计日志</span>
+                <span>{t('migration.exportIncludeAudit')}</span>
               </label>
             </div>
             <div>
-              <label htmlFor="migration-field-1" className="block text-xs text-slate-600 mb-1">设置迁移加密口令（可选，留空则不设口令；如设置需至少 6 位）</label>
-              <input id="migration-field-1"
+              <label htmlFor="migration-field-1" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                {t('migration.exportPassLabel')}
+              </label>
+              <input
+                id="migration-field-1"
                 type="password"
                 value={expPass}
                 onChange={(e) => setExpPass(e.target.value)}
-                placeholder="可选，留空则不设口令"
+                placeholder={t('migration.exportPassPlaceholder')}
                 className="w-full px-3 py-2 border rounded-lg"
               />
             </div>
@@ -143,26 +157,27 @@ export const MigrationPage: React.FC = () => {
               disabled={exporting}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg font-medium"
             >
-              {exporting ? '打包导出中...' : '生成并下载迁移包'}
+              {exporting ? t('migration.exporting') : t('migration.exportBtn')}
             </button>
           </form>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-          <div className="flex items-center gap-2 font-semibold text-slate-900">
-            <Upload className="w-4 h-4 text-emerald-600" />
-            <span>导入恢复环境</span>
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+          <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
+            <Upload className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>{t('migration.importTitle')}</span>
           </div>
-          <p className="text-xs text-slate-500">
-            上传 .skbundle 并输入迁移口令。先点击「预检包内容」查看清单与冲突，确认后执行事务导入并自动使用本机主密钥重新加密。
-          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{t('migration.importDesc')}</p>
           <div className="space-y-3 text-sm">
             <div>
-              <label htmlFor="migration-field-2" className="block text-xs text-slate-600 mb-1">选择迁移包文件（.skbundle）</label>
-              <input id="migration-field-2"
+              <label htmlFor="migration-field-2" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                {t('migration.importFileLabel')}
+              </label>
+              <input
+                id="migration-field-2"
                 type="file"
                 accept=".skbundle"
-                aria-label="选择迁移包文件"
+                aria-label={t('migration.importFileAria')}
                 disabled={inspecting || importing}
                 onChange={(e) => {
                   setImpFile(e.target.files?.[0] || null)
@@ -172,50 +187,78 @@ export const MigrationPage: React.FC = () => {
               />
             </div>
             <div>
-              <label htmlFor="migration-field-3" className="block text-xs text-slate-600 mb-1">迁移包解密口令（如导出时未设口令请留空）</label>
-              <input id="migration-field-3" aria-label="迁移包解密口令" autoComplete="off" disabled={inspecting || importing} type="password" value={impPass} onChange={(e) => { setImpPass(e.target.value); setInspectRes(null) }} placeholder="如导出时未设口令可留空" className="w-full px-3 py-2 border rounded-lg" />
+              <label htmlFor="migration-field-3" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
+                {t('migration.importPassLabel')}
+              </label>
+              <input
+                id="migration-field-3"
+                aria-label={t('migration.importPassAria')}
+                autoComplete="off"
+                disabled={inspecting || importing}
+                type="password"
+                value={impPass}
+                onChange={(e) => { setImpPass(e.target.value); setInspectRes(null) }}
+                placeholder={t('migration.importPassPlaceholder')}
+                className="w-full px-3 py-2 border rounded-lg"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
-                <label htmlFor="migration-field-4" className="block text-slate-600 mb-1">恢复模式</label>
-                <select id="migration-field-4" value={impMode} onChange={(e) => setImpMode(e.target.value as any)} className="w-full px-2.5 py-1.5 border rounded-lg bg-white">
-                  <option value="merge">增量合并</option>
-                  <option value="replace">清空覆盖恢复</option>
+                <label htmlFor="migration-field-4" className="block text-slate-600 dark:text-slate-300 mb-1">
+                  {t('migration.importModeLabel')}
+                </label>
+                <select
+                  id="migration-field-4"
+                  value={impMode}
+                  onChange={(e) => setImpMode(e.target.value as any)}
+                  className="w-full px-2.5 py-1.5 border rounded-lg bg-white dark:bg-slate-900"
+                >
+                  <option value="merge">{t('migration.importModeMerge')}</option>
+                  <option value="replace">{t('migration.importModeReplace')}</option>
                 </select>
               </div>
               {impMode === 'merge' && (
                 <div>
-                  <label htmlFor="migration-field-5" className="block text-slate-600 mb-1">冲突处理策略</label>
-                  <select id="migration-field-5" value={impConflict} onChange={(e) => setImpConflict(e.target.value as any)} className="w-full px-2.5 py-1.5 border rounded-lg bg-white">
-                    <option value="skip">跳过已存在项</option>
-                    <option value="overwrite">覆盖同名/同 ID 项</option>
+                  <label htmlFor="migration-field-5" className="block text-slate-600 dark:text-slate-300 mb-1">
+                    {t('migration.importConflictLabel')}
+                  </label>
+                  <select
+                    id="migration-field-5"
+                    value={impConflict}
+                    onChange={(e) => setImpConflict(e.target.value as any)}
+                    className="w-full px-2.5 py-1.5 border rounded-lg bg-white dark:bg-slate-900"
+                  >
+                    <option value="skip">{t('migration.importConflictSkip')}</option>
+                    <option value="overwrite">{t('migration.importConflictOverwrite')}</option>
                   </select>
                 </div>
               )}
             </div>
-            <div className="flex flex-wrap gap-4 text-xs">
+            <div className="flex flex-wrap gap-4 text-xs text-slate-700 dark:text-slate-300">
               <label className="flex items-center gap-1.5">
                 <input type="checkbox" checked={impTasks} onChange={(e) => setImpTasks(e.target.checked)} />
-                导入历史备份索引
+                {t('migration.importIncludeTasks')}
               </label>
               <label className="flex items-center gap-1.5">
                 <input type="checkbox" checked={impAdmins} onChange={(e) => setImpAdmins(e.target.checked)} />
-                导入管理员
+                {t('migration.importIncludeAdmins')}
               </label>
               <label className="flex items-center gap-1.5">
                 <input type="checkbox" checked={impAudit} onChange={(e) => setImpAudit(e.target.checked)} />
-                导入审计日志
+                {t('migration.importIncludeAudit')}
               </label>
             </div>
-            <p className="text-xs text-slate-500">{inspectRes ? '预检完成，请核对下方清单与冲突后执行恢复。' : '先预检包内容，确认成功后即可执行环境恢复。'}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {inspectRes ? t('migration.importHintReady') : t('migration.importHintPending')}
+            </p>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleInspect}
                 disabled={!impFile || inspecting || importing}
-                className="px-4 py-2 border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                className="px-4 py-2 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
               >
-                {inspecting ? '预检中...' : '预检包内容'}
+                {inspecting ? t('migration.inspecting') : t('migration.inspectBtn')}
               </button>
               <button
                 type="button"
@@ -223,34 +266,41 @@ export const MigrationPage: React.FC = () => {
                 disabled={!impFile || !inspectRes || inspecting || importing}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:opacity-50"
               >
-                {importing ? '导入中...' : '执行环境恢复'}
+                {importing ? t('migration.importing') : t('migration.importBtn')}
               </button>
             </div>
           </div>
 
           {inspectRes && (
-            <div className="p-3 rounded-lg bg-slate-50 border text-xs space-y-1.5">
-              <div className="font-semibold text-slate-800">预检通过（导出于 {formatTime(inspectRes.exported_at)}）</div>
+            <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs space-y-1.5 text-slate-700 dark:text-slate-200">
+              <div className="font-semibold text-slate-800 dark:text-slate-100">
+                {t('migration.inspectSummaryTitle', { time: formatTime(inspectRes.exported_at, lang) })}
+              </div>
               <div>
-                上游 {inspectRes.counts.upstreams} · 客户 {inspectRes.counts.clients} · 定时任务 {inspectRes.counts.cron_jobs} · 历史任务{' '}
-                {inspectRes.counts.backup_tasks} · 审计日志 {inspectRes.counts.audit_logs}
+                {t('migration.inspectCounts', {
+                  upstreams: inspectRes.counts.upstreams,
+                  clients: inspectRes.counts.clients,
+                  cron: inspectRes.counts.cron_jobs,
+                  tasks: inspectRes.counts.backup_tasks,
+                  audit: inspectRes.counts.audit_logs,
+                })}
               </div>
               {inspectRes.upstream_conflicts?.length || inspectRes.client_conflicts?.length || inspectRes.admin_conflicts?.length ? (
-                <div className="text-amber-700 flex items-start gap-1">
+                <div className="text-amber-700 dark:text-amber-300 flex items-start gap-1">
                   <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
                   <span>
-                    检测到冲突：
+                    {t('migration.conflictsDetected')}
                     {[
-                      inspectRes.upstream_conflicts?.length ? `上游(${inspectRes.upstream_conflicts.join(', ')})` : '',
-                      inspectRes.client_conflicts?.length ? `客户(${inspectRes.client_conflicts.join(', ')})` : '',
-                      inspectRes.admin_conflicts?.length ? `管理员(${inspectRes.admin_conflicts.join(', ')})` : '',
+                      inspectRes.upstream_conflicts?.length ? t('migration.conflictUpstreams', { list: inspectRes.upstream_conflicts.join(', ') }) : '',
+                      inspectRes.client_conflicts?.length ? t('migration.conflictClients', { list: inspectRes.client_conflicts.join(', ') }) : '',
+                      inspectRes.admin_conflicts?.length ? t('migration.conflictAdmins', { list: inspectRes.admin_conflicts.join(', ') }) : '',
                     ]
                       .filter(Boolean)
                       .join(' · ')}
                   </span>
                 </div>
               ) : (
-                <div className="text-emerald-700">无资源名称/ID 冲突</div>
+                <div className="text-emerald-700 dark:text-emerald-400">{t('migration.noConflicts')}</div>
               )}
             </div>
           )}

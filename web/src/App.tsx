@@ -3,6 +3,7 @@ import { api } from './api'
 import { Layout, type NavTab } from './components/Layout'
 import { LoadingState } from './components/Feedback'
 import { ToastProvider } from './components/Toast'
+import { useI18n } from './contexts/I18nContext'
 import { AuditPage } from './pages/AuditPage'
 import { AuthPage } from './pages/AuthPages'
 import { ClientsPage } from './pages/ClientsPage'
@@ -27,8 +28,9 @@ function initialTab(): NavTab {
 }
 
 export function App() {
+  const { t } = useI18n()
   const [booting, setBooting] = useState(true)
-  const [bootError, setBootError] = useState('')
+  const [bootFailed, setBootFailed] = useState(false)
   const [initialized, setInitialized] = useState(true)
   const [admin, setAdmin] = useState<Admin | null>(null)
   const [version, setVersion] = useState('dev')
@@ -52,7 +54,7 @@ export function App() {
           }
         }
       } catch {
-        setBootError('无法连接到服务，请检查服务运行状态后重试。')
+        setBootFailed(true)
       } finally {
         setBooting(false)
       }
@@ -70,11 +72,24 @@ export function App() {
   }
 
   if (booting) {
-    return <div className="min-h-screen grid place-items-center"><LoadingState label="正在加载 SafeKeep…" /></div>
+    return (
+      <div className="min-h-screen grid place-items-center bg-[#f5f7fb] dark:bg-[#0b1120]">
+        <LoadingState label={t('app.loading')} />
+      </div>
+    )
   }
 
-  if (bootError) {
-    return <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center"><p role="alert" className="text-sm text-slate-600">{bootError}</p><button className="primary-button" onClick={() => window.location.reload()}>重新连接</button></div>
+  if (bootFailed) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center bg-[#f5f7fb] dark:bg-[#0b1120]">
+        <p role="alert" className="text-sm text-slate-600 dark:text-slate-300">
+          {t('app.connectError')}
+        </p>
+        <button className="primary-button" onClick={() => window.location.reload()}>
+          {t('app.reconnect')}
+        </button>
+      </div>
+    )
   }
 
   if (!initialized) {
