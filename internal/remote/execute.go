@@ -68,6 +68,7 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 		}
 		now := time.Now().UTC()
 		r.FinishedAt = &now
+		r.Progress = &db.RemoteRunProgress{Stage: "finished"}
 		s.mu.Lock()
 		s.persist(r)
 		delete(s.active, j.ID)
@@ -90,6 +91,7 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 	var h *db.RemoteHost
 	if !retry {
 		var err error
+		s.updateProgress(r, "checking", 0, 0)
 		h, err = s.CheckHost(ctx, r.HostID, false)
 		if err != nil {
 			r.Error = err.Error()
@@ -109,6 +111,9 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 			continue
 		}
 		if retry {
+			a.Status = "running"
+			a.Error = ""
+			s.updateProgress(r, "verifying", i+1, 0)
 			if r.Spools[a.SourcePath] == "" {
 				a.Error = "归档不可用，请重新执行备份任务"
 				continue
@@ -119,7 +124,8 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 			}
 		} else {
 			a.Status = "running"
-			s.persist(r)
+			// 远程打包与 SSH 拉取使用同一条字节流，合并为一个进度步骤。
+			s.updateProgress(r, "archiving", i+1, 0)
 			if err := s.pullArchive(ctx, h, j.Directories[i], r, a); err != nil {
 				a.Status = "failed"
 				a.Error = err.Error()
@@ -129,7 +135,7 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 		}
 		a.Status = "running"
 		a.Error = ""
-		s.uploadArchive(ctx, r, a)
+		s.uploadArchive(ctx, r, a, i+1)
 		allSucceeded := true
 		for _, upload := range a.Uploads {
 			allSucceeded = allSucceeded && upload.Status == "succeeded"
@@ -140,6 +146,11 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 		}
 		s.persist(r)
 	}
+}
+
+func (s *Service) updateProgress(r *db.RemoteRun, stage string, directoryIndex, upstreamIndex int) {
+	r.Progress = &db.RemoteRunProgress{Stage: stage, DirectoryIndex: directoryIndex, UpstreamIndex: upstreamIndex}
+	s.persist(r)
 }
 
 func (s *Service) pullArchive(ctx context.Context, h *db.RemoteHost, d db.RemoteDirectory, r *db.RemoteRun, a *db.RemoteArchive) error {
@@ -185,7 +196,7 @@ func (s *Service) pullArchive(ctx context.Context, h *db.RemoteHost, d db.Remote
 	return nil
 }
 
-func (s *Service) uploadArchive(ctx context.Context, r *db.RemoteRun, a *db.RemoteArchive) {
+func (s *Service) uploadArchive(ctx context.Context, r *db.RemoteRun, a *db.RemoteArchive, directoryIndex int) {
 	settings, err := s.store.GetSystemSettings(ctx)
 	if err != nil {
 		a.Error = "无法读取上传配置"
@@ -205,7 +216,7 @@ func (s *Service) uploadArchive(ctx context.Context, r *db.RemoteRun, a *db.Remo
 			}
 			u.Status = "running"
 			u.Attempts++
-			s.persist(r)
+			s.updateProgress(r, "uploading", directoryIndex, i+1)
 			err := s.uploadOnce(ctx, r.Spools[a.SourcePath], a, u)
 			if err == nil {
 				u.Status = "succeeded"
@@ -216,7 +227,11 @@ func (s *Service) uploadArchive(ctx context.Context, r *db.RemoteRun, a *db.Remo
 			u.Error = err.Error()
 			s.persist(r)
 			if n+1 < attempts {
-				timer := time.NewTimer(time.Duration(15*(1<<min(n, 4))) * time.Second)
+				delay := time.Duration(15*(1<<min(n, 4))) * time.Second
+				retryAt := time.Now().Add(delay).UTC()
+				r.Progress = &db.RemoteRunProgress{Stage: "retry_wait", DirectoryIndex: directoryIndex, UpstreamIndex: i + 1, RetryAt: &retryAt}
+				s.persist(r)
+				timer := time.NewTimer(delay)
 				select {
 				case <-timer.C:
 				case <-ctx.Done():

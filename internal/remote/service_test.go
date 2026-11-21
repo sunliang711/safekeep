@@ -32,13 +32,14 @@ import (
 
 // 测试 SSH 服务只接受本次生成的客户端公钥，在临时目录执行真实 tar 命令。
 type sshFixture struct {
-	listener    net.Listener
-	config      *ssh.ServerConfig
-	failArchive atomic.Bool
-	missingTool atomic.Bool
-	commands    atomic.Int32
-	mu          sync.Mutex
-	conns       []net.Conn
+	listener      net.Listener
+	config        *ssh.ServerConfig
+	failArchive   atomic.Bool
+	missingTool   atomic.Bool
+	commands      atomic.Int32
+	beforeCommand func(string)
+	mu            sync.Mutex
+	conns         []net.Conn
 }
 
 func startSSH(t *testing.T, publicKey string) *sshFixture {
@@ -119,6 +120,12 @@ func (f *sshFixture) serve(conn net.Conn) {
 				}
 				req.Reply(true, nil)
 				f.commands.Add(1)
+				f.mu.Lock()
+				beforeCommand := f.beforeCommand
+				f.mu.Unlock()
+				if beforeCommand != nil {
+					beforeCommand(payload.Command)
+				}
 				if f.missingTool.Load() && strings.HasPrefix(payload.Command, "tar -czf /dev/null") {
 					channel.Stderr().Write([]byte("tar: not found"))
 					channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{127}))
@@ -145,10 +152,11 @@ func (f *sshFixture) serve(conn net.Conn) {
 }
 
 type fakeProvider struct {
-	mu    sync.Mutex
-	files map[string][]byte
-	calls int
-	fail  bool
+	mu           sync.Mutex
+	files        map[string][]byte
+	calls        int
+	fail         bool
+	beforeUpload func()
 }
 
 func (p *fakeProvider) Type() string { return "fake" }
@@ -156,6 +164,9 @@ func (p *fakeProvider) Upload(_ context.Context, key string, body io.ReadSeeker,
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
+	if p.beforeUpload != nil {
+		p.beforeUpload()
+	}
 	if p.fail {
 		return nil, errors.New("upstream unavailable")
 	}
@@ -291,6 +302,9 @@ func TestRemoteBackupAndRetry(t *testing.T) {
 	if done.Status != "partial_success" {
 		t.Fatalf("unexpected result: %+v", done)
 	}
+	if done.Progress == nil || done.Progress.Stage != "finished" {
+		t.Fatalf("partial result still has active progress: %+v", done.Progress)
+	}
 	if len(done.Spools) != 2 {
 		t.Fatalf("failed uploads must retain archives: %+v", done.Spools)
 	}
@@ -331,8 +345,12 @@ func TestRemoteBackupAndRetry(t *testing.T) {
 	f.providers["two"].fail = false
 	f.providers["two"].mu.Unlock()
 	f.ssh.listener.Close()
-	if _, err := f.s.Retry(ctx, run.ID); err != nil {
+	retrySnapshot, err := f.s.Retry(ctx, run.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if retrySnapshot.Progress == nil || retrySnapshot.Progress.Stage != "queued" {
+		t.Fatalf("manual retry retained stale progress: %+v", retrySnapshot.Progress)
 	}
 	done = waitRun(t, f, run.ID)
 	if done.Status != "succeeded" {
@@ -421,6 +439,7 @@ func TestJobValidationAndRestartRecovery(t *testing.T) {
 		}
 	}
 	r := &db.RemoteRun{ID: crypto.NewULID(), JobID: j.ID, Status: "running", StartedAt: time.Now(), Archives: []db.RemoteArchive{{SourcePath: "/var/lib/mysql", Status: "running"}}, Spools: map[string]string{}}
+	r.Progress = &db.RemoteRunProgress{Stage: "archiving", DirectoryIndex: 1}
 	if err := f.store.SaveRemoteRun(ctx, r); err != nil {
 		t.Fatal(err)
 	}
@@ -432,6 +451,9 @@ func TestJobValidationAndRestartRecovery(t *testing.T) {
 	got, err := f.store.GetRemoteRun(ctx, r.ID)
 	if err != nil || got.Status != "failed" || got.FinishedAt == nil {
 		t.Fatalf("interrupted run recovery failed: %+v %v", got, err)
+	}
+	if got.Progress == nil || got.Progress.Stage != "finished" {
+		t.Fatalf("recovered execution still has active progress: %+v", got.Progress)
 	}
 	if err := f.s.DeleteJob(ctx, j.ID); err != nil {
 		t.Fatal(err)

@@ -173,4 +173,15 @@ func TestRemoteAdminAPIProtectsPrivateKeys(t *testing.T) {
 			}
 		})
 	}
+
+	run := db.RemoteRun{ID: "progress-run", JobID: jobID, JobName: "schedule-test", Status: "running", StartedAt: time.Now().UTC(), Progress: &db.RemoteRunProgress{Stage: "uploading", DirectoryIndex: 1, UpstreamIndex: 1}, Archives: []db.RemoteArchive{{SourcePath: "/var/lib/data", Status: "running", Uploads: []db.RemoteUpload{{UpstreamID: upstream.ID, UpstreamName: upstream.Name, Status: "running", Attempts: 1}}}}, Spools: map[string]string{"/var/lib/data": "/private/local-buffer"}}
+	if err := env.store.SaveRemoteRun(context.Background(), &run); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/admin/api/v1/remote-backups/runs", "/admin/api/v1/remote-backups/runs/" + run.ID} {
+		response := request(http.MethodGet, path, nil)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"progress":{"stage":"uploading","directory_index":1,"upstream_index":1}`) || strings.Contains(response.Body.String(), "/private/local-buffer") {
+			t.Fatalf("progress unavailable or private spool exposed: %s", response.Body.String())
+		}
+	}
 }

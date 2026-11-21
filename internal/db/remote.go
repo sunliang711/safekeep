@@ -67,18 +67,27 @@ type RemoteArchive struct {
 	Uploads    []RemoteUpload `json:"uploads"`
 }
 
+// RemoteRunProgress 保存当前步骤，目录和上游序号从 1 开始，0 表示尚未开始。
+type RemoteRunProgress struct {
+	Stage          string     `json:"stage"`
+	DirectoryIndex int        `json:"directory_index,omitempty"`
+	UpstreamIndex  int        `json:"upstream_index,omitempty"`
+	RetryAt        *time.Time `json:"retry_at,omitempty"`
+}
+
 type RemoteRun struct {
-	ID         string            `json:"id"`
-	JobID      string            `json:"job_id"`
-	JobName    string            `json:"job_name"`
-	HostID     string            `json:"host_id"`
-	Trigger    string            `json:"trigger"`
-	Status     string            `json:"status"`
-	Error      string            `json:"error,omitempty"`
-	Archives   []RemoteArchive   `json:"archives"`
-	StartedAt  time.Time         `json:"started_at"`
-	FinishedAt *time.Time        `json:"finished_at,omitempty"`
-	Spools     map[string]string `json:"-"`
+	ID         string             `json:"id"`
+	JobID      string             `json:"job_id"`
+	JobName    string             `json:"job_name"`
+	HostID     string             `json:"host_id"`
+	Trigger    string             `json:"trigger"`
+	Status     string             `json:"status"`
+	Progress   *RemoteRunProgress `json:"progress,omitempty"`
+	Error      string             `json:"error,omitempty"`
+	Archives   []RemoteArchive    `json:"archives"`
+	StartedAt  time.Time          `json:"started_at"`
+	FinishedAt *time.Time         `json:"finished_at,omitempty"`
+	Spools     map[string]string  `json:"-"`
 }
 
 func (s *Store) migrateRemoteBackups(ctx context.Context) error {

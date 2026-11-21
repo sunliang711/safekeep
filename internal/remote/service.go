@@ -66,6 +66,7 @@ func (s *Service) Start() error {
 		r := &interrupted[i]
 		r.Status = "failed"
 		r.Error = "服务重启中断了本次执行，可重试失败项"
+		r.Progress = &db.RemoteRunProgress{Stage: "finished"}
 		now := time.Now().UTC()
 		r.FinishedAt = &now
 		for j := range r.Archives {
@@ -358,6 +359,7 @@ func (s *Service) Run(ctx context.Context, jobID, trigger string) (*db.RemoteRun
 		return nil, invalid("任务的定时执行已关闭")
 	}
 	r := &db.RemoteRun{ID: crypto.NewULID(), JobID: j.ID, JobName: j.Name, HostID: j.HostID, Trigger: trigger, Status: "running", StartedAt: time.Now().UTC(), Spools: map[string]string{}, Archives: make([]db.RemoteArchive, len(j.Directories))}
+	r.Progress = &db.RemoteRunProgress{Stage: "queued"}
 	loc, err := time.LoadLocation(j.Timezone)
 	if err != nil {
 		return nil, err
@@ -412,6 +414,7 @@ func (s *Service) Retry(ctx context.Context, runID string) (*db.RemoteRun, error
 	// 上传重试只使用原执行的归档、目标和对象路径，不受任务配置修改影响。
 	r.Status = "running"
 	r.Error = ""
+	r.Progress = &db.RemoteRunProgress{Stage: "queued"}
 	r.FinishedAt = nil
 	if err := s.store.SaveRemoteRun(ctx, r); err != nil {
 		return nil, err

@@ -76,6 +76,7 @@ export const api = {
   deleteRemoteJob: (id: string) => req(`/admin/api/v1/remote-backups/jobs/${id}`, { method: 'DELETE' }),
   runRemoteJob: (id: string) => req<RemoteRun>(`/admin/api/v1/remote-backups/jobs/${id}/run`, { method: 'POST' }),
   listRemoteRuns: (jobID = '') => req<{ items: RemoteRun[] }>(`/admin/api/v1/remote-backups/runs?${new URLSearchParams({ job_id: jobID })}`),
+  getRemoteRun: (id: string) => req<RemoteRun>(`/admin/api/v1/remote-backups/runs/${id}`),
   retryRemoteRun: (id: string) => req<RemoteRun>(`/admin/api/v1/remote-backups/runs/${id}/retry`, { method: 'POST' }),
 
   listProxies: () => req<{ items: NetworkProxy[] }>('/admin/api/v1/proxies'),

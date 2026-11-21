@@ -290,6 +290,7 @@ export interface RemoteRun {
   host_id: string;
   trigger: string;
   status: string;
+  progress?: { stage: string; directory_index?: number; upstream_index?: number; retry_at?: string };
   error?: string;
   started_at: string;
   finished_at?: string;
