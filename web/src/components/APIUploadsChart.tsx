@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { PieChart } from 'lucide-react'
 import { useI18n } from '../contexts/I18nContext'
 import type { UploadStats } from '../types'
@@ -9,8 +10,12 @@ type Period = 'today' | 'week' | 'month'
 export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => {
   const { t, lang } = useI18n()
   const [period, setPeriod] = useState<Period>('today')
+  const [hovered, setHovered] = useState<{ clientID: string; x: number; y: number } | null>(null)
+  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 })
+  const tooltipRef = useRef<HTMLDivElement>(null)
   const counts = stats[period]
   const total = counts.reduce((sum, item) => sum + item.upload_count, 0)
+  const activeItem = hovered ? counts.find((item) => item.client_id === hovered.clientID) : undefined
   // 三个时间范围共用颜色表，用黄金角分散相邻客户的色相。
   const clientIDs = Array.from(new Set([...stats.today, ...stats.week, ...stats.month].map((item) => item.client_id))).sort()
   const clientColors = new Map(clientIDs.map((id, index) => [id, `hsl(${(240 + index * 137.508) % 360}, 68%, 55%)`]))
@@ -21,6 +26,28 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
     { value: 'month' as const, label: t('dashboard.uploads.month') },
   ]
   let angle = -Math.PI / 2
+
+  useEffect(() => {
+    const clearHover = () => setHovered(null)
+    clearHover()
+    window.addEventListener('resize', clearHover)
+    return () => {
+      window.removeEventListener('resize', clearHover)
+    }
+  }, [stats, period])
+
+  useLayoutEffect(() => {
+    if (!hovered || !activeItem || !tooltipRef.current) return
+    // 用实际提示框尺寸避让指针，并在视口边缘翻转、限制位置。
+    const { width, height } = tooltipRef.current.getBoundingClientRect()
+    const gap = 12
+    const x = hovered.x + gap + width <= window.innerWidth - gap ? hovered.x + gap : hovered.x - width - gap
+    const y = hovered.y + gap + height <= window.innerHeight - gap ? hovered.y + gap : hovered.y - height - gap
+    setTooltipPosition({
+      x: Math.max(gap, Math.min(x, window.innerWidth - width - gap)),
+      y: Math.max(gap, Math.min(y, window.innerHeight - height - gap)),
+    })
+  }, [hovered, activeItem, lang, total])
 
   return (
     <section className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5" aria-labelledby="api-uploads-title">
@@ -55,20 +82,33 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
                 const sweep = (item.upload_count / total) * Math.PI * 2
                 angle += sweep
                 const label = t('dashboard.uploads.slice', { name: item.client_name, count: number(item.upload_count), percent: ((item.upload_count / total) * 100).toFixed(1) })
-                return counts.length === 1 ? (
-                  <circle key={item.client_id} cx="120" cy="120" r="100" fill={clientColors.get(item.client_id)}>
-                    <title>{label}</title>
-                  </circle>
-                ) : (
-                  <path
+                const active = activeItem?.client_id === item.client_id
+                const updateHover = (event: React.PointerEvent<SVGGElement>) => {
+                  if (event.pointerType === 'touch') return
+                  setHovered({ clientID: item.client_id, x: event.clientX, y: event.clientY })
+                }
+                return (
+                  <g
                     key={item.client_id}
-                    d={`M 120 120 L ${120 + 100 * Math.cos(start)} ${120 + 100 * Math.sin(start)} A 100 100 0 ${sweep > Math.PI ? 1 : 0} 1 ${120 + 100 * Math.cos(angle)} ${120 + 100 * Math.sin(angle)} Z`}
-                    fill={clientColors.get(item.client_id)}
-                    className="stroke-white dark:stroke-slate-900"
-                    strokeWidth="2"
+                    aria-label={label}
+                    aria-describedby={active ? 'api-upload-tooltip' : undefined}
+                    onPointerEnter={updateHover}
+                    onPointerMove={updateHover}
+                    onPointerLeave={() => setHovered(null)}
+                    className="transition-[opacity,filter] duration-150"
+                    style={{ opacity: activeItem && !active ? 0.35 : 1, filter: active ? 'brightness(1.15)' : undefined }}
                   >
-                    <title>{label}</title>
-                  </path>
+                    {counts.length === 1 ? (
+                      <circle cx="120" cy="120" r="100" fill={clientColors.get(item.client_id)} />
+                    ) : (
+                      <path
+                        d={`M 120 120 L ${120 + 100 * Math.cos(start)} ${120 + 100 * Math.sin(start)} A 100 100 0 ${sweep > Math.PI ? 1 : 0} 1 ${120 + 100 * Math.cos(angle)} ${120 + 100 * Math.sin(angle)} Z`}
+                        fill={clientColors.get(item.client_id)}
+                        className="stroke-white dark:stroke-slate-900"
+                        strokeWidth={active ? 3 : 2}
+                      />
+                    )}
+                  </g>
                 )
               })}
             </svg>
@@ -89,6 +129,23 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
         </div>
       ) : (
         <EmptyState icon={<PieChart className="w-6 h-6" />} title={t('dashboard.uploads.emptyTitle')} description={t('dashboard.uploads.emptyDesc')} />
+      )}
+
+      {hovered && activeItem && createPortal(
+        <div
+          ref={tooltipRef}
+          id="api-upload-tooltip"
+          role="tooltip"
+          className="pointer-events-none fixed z-50 w-max rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs shadow-lg"
+          style={{ left: tooltipPosition.x, top: tooltipPosition.y, maxWidth: 'min(20rem, calc(100vw - 24px))' }}
+        >
+          <div className="font-medium text-slate-900 dark:text-slate-100 break-words">{activeItem.client_name}</div>
+          <div className="mt-1 flex justify-between gap-4 text-slate-500 dark:text-slate-300 tabular-nums">
+            <span>{t('dashboard.uploads.total', { count: number(activeItem.upload_count) })}</span>
+            <span>{((activeItem.upload_count / total) * 100).toFixed(1)}%</span>
+          </div>
+        </div>,
+        document.body
       )}
 
       <p className="mt-4 text-xs text-slate-400 dark:text-slate-500">{t('dashboard.uploads.timezone', { timezone: stats.timezone })}</p>
