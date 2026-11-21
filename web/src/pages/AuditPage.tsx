@@ -14,6 +14,11 @@ const ACTION_KEYS: Record<string, TranslationKey> = {
   'backup.download': 'audit.action.backup.download',
   'task.download': 'audit.action.task.download',
   'task.retry': 'audit.action.task.retry',
+  'proxy.test': 'audit.action.proxy.test',
+  'proxy.create': 'audit.action.proxy.create',
+  'proxy.update': 'audit.action.proxy.update',
+  'proxy.delete': 'audit.action.proxy.delete',
+  'proxy.reveal_secrets': 'audit.action.proxy.reveal_secrets',
   'upstream.create': 'audit.action.upstream.create',
   'upstream.update': 'audit.action.upstream.update',
   'upstream.delete': 'audit.action.upstream.delete',
@@ -47,6 +52,7 @@ const ACTION_KEYS: Record<string, TranslationKey> = {
 
 const RESOURCE_KEYS: Record<string, TranslationKey> = {
   admin: 'audit.resource.admin',
+  proxy: 'audit.resource.proxy',
   upstream: 'audit.resource.upstream',
   client: 'audit.resource.client',
   backup_task: 'audit.resource.backup_task',
@@ -75,6 +81,11 @@ const ACTION_GROUPS: { labelKey: TranslationKey; actions: string[] }[] = [
   {
     labelKey: 'audit.actionGroup.upstream',
     actions: [
+      'proxy.create',
+      'proxy.update',
+      'proxy.delete',
+      'proxy.test',
+      'proxy.reveal_secrets',
       'upstream.create',
       'upstream.update',
       'upstream.delete',
@@ -234,6 +245,7 @@ export const AuditPage: React.FC = () => {
         }
         return shortId(log.resource_id)
       }
+      case 'proxy':
       case 'upstream': {
         if (d?.name) {
           const typeLabel = d?.type ? ` (${String(d.type).toUpperCase()})` : ''

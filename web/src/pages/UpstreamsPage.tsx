@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react'
 import { CheckCircle2, Copy, Link2, Loader2, Plus, Trash2, Upload, Wifi, XCircle } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
+import { ProxyManager } from '../components/ProxyManager'
 import { SecretField } from '../components/SecretField'
 import { api } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
 import { useI18n } from '../contexts/I18nContext'
 import { copyText } from '../utils/clipboard'
-import type { Upstream } from '../types'
+import type { NetworkProxy, Upstream } from '../types'
 
 interface FormState {
   id?: string
@@ -33,14 +34,8 @@ interface FormState {
   app_secret: string
   refresh_token: string
   root_path: string
-  // Proxy
-  proxy_enabled: boolean
-  proxy_type: 'http' | 'https' | 'socks5'
-  proxy_host: string
-  proxy_port: number
-  proxy_username: string
-  proxy_password: string
-  clear_proxy_password: boolean
+  // 选择已保存的代理，空字符串表示直连。
+  proxy_id: string
 }
 
 const emptyForm = (): FormState => ({
@@ -62,19 +57,15 @@ const emptyForm = (): FormState => ({
   app_secret: '',
   refresh_token: '',
   root_path: '/safekeep',
-  proxy_enabled: false,
-  proxy_type: 'socks5',
-  proxy_host: '127.0.0.1',
-  proxy_port: 1080,
-  proxy_username: '',
-  proxy_password: '',
-  clear_proxy_password: false,
+  proxy_id: '',
 })
 
 export const UpstreamsPage: React.FC = () => {
   const toast = useToast()
   const { t } = useI18n()
   const [items, setItems] = useState<Upstream[]>([])
+  const [activeTab, setActiveTab] = useState<'upstreams' | 'proxies'>('upstreams')
+  const [proxies, setProxies] = useState<NetworkProxy[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<FormState>(emptyForm())
@@ -90,14 +81,14 @@ export const UpstreamsPage: React.FC = () => {
     serviceAccountJSON: false,
     appSecret: false,
     refreshToken: false,
-    proxyPass: false,
   })
 
   const load = async () => {
     setLoading(true)
     try {
-      const res = await api.listUpstreams()
+      const [res, proxyRes] = await Promise.all([api.listUpstreams(), api.listProxies()])
       setItems(res.items || [])
+      setProxies(proxyRes.items || [])
     } catch (err: any) {
       toast.error(err.message || t('upstreams.loadError'))
     } finally {
@@ -139,13 +130,7 @@ export const UpstreamsPage: React.FC = () => {
       app_secret: '',
       refresh_token: '',
       root_path: u.config.root_path || '',
-      proxy_enabled: u.proxy_enabled,
-      proxy_type: (u.proxy_type as any) || 'socks5',
-      proxy_host: u.proxy_host || '',
-      proxy_port: u.proxy_port || 1080,
-      proxy_username: u.proxy_username || '',
-      proxy_password: '',
-      clear_proxy_password: false,
+      proxy_id: u.proxy_id || '',
     }
     setForm(nextForm)
     setInitialFormSnap(JSON.stringify(nextForm))
@@ -154,7 +139,6 @@ export const UpstreamsPage: React.FC = () => {
       serviceAccountJSON: Boolean(u.config?.has_service_account_json),
       appSecret: Boolean(u.config?.has_app_secret),
       refreshToken: Boolean(u.config?.has_refresh_token),
-      proxyPass: Boolean(u.has_proxy_password),
     })
     setProxyTestResult(null)
     setProxyTargetURL('')
@@ -182,7 +166,7 @@ export const UpstreamsPage: React.FC = () => {
   }
 
   const handleTestProxy = async () => {
-    if (!form.proxy_enabled || testingProxy) return
+    if (!form.proxy_id || testingProxy) return
     setProxyTestResult(null)
     setTestingProxy(true)
     const targetURL = proxyTargetURL.trim() || defaultProxyTestURL()
@@ -190,12 +174,7 @@ export const UpstreamsPage: React.FC = () => {
       const res = await api.testUpstreamProxy({
         upstream_id: form.id,
         upstream_type: form.type,
-        proxy_type: form.proxy_type,
-        proxy_host: form.proxy_host,
-        proxy_port: Number(form.proxy_port),
-        proxy_username: form.proxy_username,
-        proxy_password: form.proxy_password,
-        clear_proxy_password: form.clear_proxy_password,
+        proxy_id: form.proxy_id,
         target_url: targetURL,
       })
       if (res.status === 'ok') {
@@ -278,16 +257,7 @@ export const UpstreamsPage: React.FC = () => {
       type: form.type,
       enabled: form.enabled,
       config,
-      proxy_enabled: form.proxy_enabled,
-      proxy_type: form.proxy_type,
-      proxy_host: form.proxy_host,
-      proxy_port: Number(form.proxy_port),
-      proxy_username: form.proxy_username,
-    }
-    if (form.clear_proxy_password) {
-      payload.proxy_password = ''
-    } else if (!form.id || form.proxy_password !== '') {
-      payload.proxy_password = form.proxy_password
+      proxy_id: form.proxy_id,
     }
 
     try {
@@ -348,7 +318,7 @@ export const UpstreamsPage: React.FC = () => {
     const next = emptyForm()
     setForm(next)
     setInitialFormSnap(JSON.stringify(next))
-    setSavedSecretFlags({ secretKey: false, serviceAccountJSON: false, appSecret: false, refreshToken: false, proxyPass: false })
+    setSavedSecretFlags({ secretKey: false, serviceAccountJSON: false, appSecret: false, refreshToken: false })
     setProxyTestResult(null)
     setProxyTargetURL('')
     setModalOpen(true)
@@ -361,18 +331,48 @@ export const UpstreamsPage: React.FC = () => {
           <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('upstreams.title')}</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">{t('upstreams.subtitle')}</p>
         </div>
-        <button
+        {activeTab === 'upstreams' && <button
           onClick={openNew}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
         >
           <Plus className="w-4 h-4" /> {t('upstreams.addBtn')}
-        </button>
+        </button>}
       </div>
 
-      {loading ? (
-        <LoadingState label={t('upstreams.loading')} />
+      <div role="tablist" aria-label={t('upstreams.tabsLabel')} className="flex gap-1 border-b border-slate-200 dark:border-slate-800">
+        {(['upstreams', 'proxies'] as const).map((tab) => (
+          <button
+            key={tab}
+            id={`tab-${tab}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab}
+            aria-controls={`panel-${tab}`}
+            tabIndex={activeTab === tab ? 0 : -1}
+            onClick={() => setActiveTab(tab)}
+            onKeyDown={(e) => {
+              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+              e.preventDefault()
+              const next = e.key === 'Home' ? 'upstreams' : e.key === 'End' ? 'proxies' : tab === 'upstreams' ? 'proxies' : 'upstreams'
+              setActiveTab(next)
+              document.getElementById(`tab-${next}`)?.focus()
+            }}
+            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === tab ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
+          >
+            {tab === 'upstreams' ? t('upstreams.tabStorage') : t('upstreams.tabProxies')}
+            <span className="ml-2 text-xs opacity-70">{tab === 'upstreams' ? items.length : proxies.length}</span>
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'proxies' ? (
+        <div role="tabpanel" id="panel-proxies" aria-labelledby="tab-proxies">
+          <ProxyManager proxies={proxies} onChanged={load} />
+        </div>
+      ) : loading ? (
+        <div role="tabpanel" id="panel-upstreams" aria-labelledby="tab-upstreams"><LoadingState label={t('upstreams.loading')} /></div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div role="tabpanel" id="panel-upstreams" aria-labelledby="tab-upstreams" className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {items.length === 0 && (
             <div className="md:col-span-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
               <EmptyState
@@ -547,7 +547,7 @@ export const UpstreamsPage: React.FC = () => {
                   {t('upstreams.networkProxy')}:{' '}
                   {u.proxy_enabled ? (
                     <span className="font-mono text-indigo-700 dark:text-indigo-400">
-                      {u.proxy_type.toUpperCase()}://{u.proxy_host}:{u.proxy_port}
+                      {u.proxy_name && `${u.proxy_name} · `}{u.proxy_type.toUpperCase()}://{u.proxy_host}:{u.proxy_port}
                     </span>
                   ) : (
                     t('upstreams.directNoProxy')
@@ -902,51 +902,14 @@ export const UpstreamsPage: React.FC = () => {
               )}
 
               <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
-                <label className="inline-flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-100">
-                  <input type="checkbox" checked={form.proxy_enabled} onChange={(e) => setForm({ ...form, proxy_enabled: e.target.checked })} />
-                  <span>{t('upstreams.proxyEnable')}</span>
-                </label>
-                {form.proxy_enabled && (
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <label htmlFor="upstreams-field-14" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyProtocol')}</label>
-                      <select id="upstreams-field-14" value={form.proxy_type} onChange={(e) => setForm({ ...form, proxy_type: e.target.value as any })} className="w-full px-3 py-1.5 border rounded-lg bg-white dark:bg-slate-900">
-                        <option value="socks5">SOCKS5</option>
-                        <option value="http">HTTP</option>
-                        <option value="https">HTTPS</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label htmlFor="upstreams-field-15" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyHost')}</label>
-                      <input id="upstreams-field-15" required value={form.proxy_host} onChange={(e) => setForm({ ...form, proxy_host: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
-                    </div>
-                    <div>
-                      <label htmlFor="upstreams-field-16" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyPort')}</label>
-                      <input id="upstreams-field-16" type="number" required min={1} max={65535} value={form.proxy_port} onChange={(e) => setForm({ ...form, proxy_port: Number(e.target.value) })} className="w-full px-3 py-1.5 border rounded-lg" />
-                    </div>
-                    <div>
-                      <label htmlFor="upstreams-field-17" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('upstreams.proxyUser')}</label>
-                      <input id="upstreams-field-17" value={form.proxy_username} onChange={(e) => setForm({ ...form, proxy_username: e.target.value })} className="w-full px-3 py-1.5 border rounded-lg" />
-                    </div>
-                    <div className="col-span-2">
-                      <label htmlFor="upstreams-field-18" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">
-                        {t('upstreams.proxyPass', { hint: form.id ? t('upstreams.proxyPassSavedHint') : t('upstreams.proxyPassOptionalHint') })}
-                      </label>
-                      <SecretField
-                        id="upstreams-field-18"
-                        disabled={form.clear_proxy_password}
-                        hasSaved={Boolean(form.id && savedSecretFlags.proxyPass && !form.clear_proxy_password)}
-                        value={form.proxy_password}
-                        onChange={(v) => setForm({ ...form, proxy_password: v })}
-                        onReveal={form.id ? async () => (await api.revealUpstreamSecrets(form.id!)).proxy_password || '' : undefined}
-                      />
-                      {form.id && (
-                        <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                          <input type="checkbox" checked={form.clear_proxy_password} onChange={(e) => setForm({ ...form, clear_proxy_password: e.target.checked, proxy_password: '' })} />
-                          <span>{t('upstreams.clearProxyPass')}</span>
-                        </label>
-                      )}
-                    </div>
+                <label htmlFor="upstream-proxy" className="block font-semibold text-slate-800 dark:text-slate-100">{t('proxies.select')}</label>
+                <select id="upstream-proxy" value={form.proxy_id} onChange={(e) => { setForm({ ...form, proxy_id: e.target.value }); setProxyTestResult(null) }} className="w-full px-3 py-1.5 border rounded-lg bg-white dark:bg-slate-900">
+                  <option value="">{t('common.direct')}</option>
+                  {proxies.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.type.toUpperCase()} · {p.host}:{p.port}</option>)}
+                </select>
+                <p className="text-xs text-slate-500">{t('proxies.selectHint')}</p>
+                {form.proxy_id && (
+                  <div>
                     <div className="col-span-3 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
                       <div className="flex flex-wrap items-end gap-2">
                         <div className="flex-1 min-w-[200px]">
@@ -964,7 +927,7 @@ export const UpstreamsPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={handleTestProxy}
-                          disabled={testingProxy || !form.proxy_host.trim() || !form.proxy_port}
+                          disabled={testingProxy || !form.proxy_id}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/15 hover:bg-indigo-100 dark:hover:bg-indigo-500/25 disabled:opacity-45 disabled:cursor-not-allowed text-indigo-700 dark:text-indigo-300 rounded-lg text-xs font-medium shrink-0"
                         >
                           {testingProxy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}

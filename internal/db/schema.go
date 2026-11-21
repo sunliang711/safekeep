@@ -88,6 +88,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			updated_at DATETIME NOT NULL,
 			updated_by TEXT NOT NULL DEFAULT ''
 		);`,
+		`CREATE TABLE IF NOT EXISTS proxies (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			type TEXT NOT NULL,
+			host TEXT NOT NULL,
+			port INTEGER NOT NULL,
+			username_encrypted TEXT NOT NULL DEFAULT '',
+			password_encrypted TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS upstreams (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
@@ -253,7 +264,21 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "cron_jobs", "timeout_sec", "INTEGER NOT NULL DEFAULT 300"); err != nil {
 		return fmt.Errorf("ensure cron_jobs.timeout_sec: %w", err)
 	}
-	return nil
+	if err := s.ensureColumn(ctx, "upstreams", "proxy_id", "TEXT REFERENCES proxies(id) ON DELETE RESTRICT"); err != nil {
+		return fmt.Errorf("ensure upstreams.proxy_id: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_upstreams_proxy ON upstreams(proxy_id)`); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := MigrateLegacyProxies(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {

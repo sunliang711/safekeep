@@ -7,12 +7,27 @@ export interface Admin {
   updated_at: string;
 }
 
+export interface NetworkProxy {
+  id: string;
+  name: string;
+  type: 'http' | 'https' | 'socks5';
+  host: string;
+  port: number;
+  username: string;
+  has_password: boolean;
+  upstream_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Upstream {
   id: string;
   name: string;
   type: 's3' | 'r2' | 'gcs' | 'dropbox';
   enabled: boolean;
   config: Record<string, any>;
+  proxy_id: string;
+  proxy_name: string;
   proxy_enabled: boolean;
   proxy_type: 'http' | 'https' | 'socks5' | '';
   proxy_host: string;
@@ -220,6 +235,7 @@ export interface InspectSummary {
     audit_logs: boolean;
   };
   counts: {
+    proxies: number;
     system_settings: number;
     upstreams: number;
     clients: number;
@@ -229,6 +245,7 @@ export interface InspectSummary {
     backup_tasks: number;
     audit_logs: number;
   };
+  proxy_conflicts: string[];
   upstream_conflicts: string[];
   client_conflicts: string[];
   admin_conflicts: string[];

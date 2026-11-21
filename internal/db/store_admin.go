@@ -301,31 +301,50 @@ func (s *Store) CreateUpstream(ctx context.Context, u *Upstream) error {
 	if u.LastTestStatus == "" {
 		u.LastTestStatus = "untested"
 	}
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := ensureLegacyProxy(ctx, tx, u); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO upstreams(
-			id, name, type, enabled, config_encrypted,
+			id, name, type, enabled, config_encrypted, proxy_id,
 			proxy_enabled, proxy_type, proxy_host, proxy_port,
 			proxy_username_encrypted, proxy_password_encrypted,
 			last_test_status, last_test_error, last_tested_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		u.ID, u.Name, u.Type, boolToInt(u.Enabled), u.ConfigEncrypted,
+		) VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Name, u.Type, boolToInt(u.Enabled), u.ConfigEncrypted, u.ProxyID,
 		boolToInt(u.ProxyEnabled), u.ProxyType, u.ProxyHost, u.ProxyPort,
 		u.ProxyUsernameEncrypted, u.ProxyPasswordEncrypted,
 		u.LastTestStatus, u.LastTestError, u.LastTestedAt, u.CreatedAt, u.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UpdateUpstream(ctx context.Context, u *Upstream) error {
 	u.UpdatedAt = time.Now().UTC()
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := ensureLegacyProxy(ctx, tx, u); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE upstreams SET
-			name = ?, type = ?, enabled = ?, config_encrypted = ?,
+			name = ?, type = ?, enabled = ?, config_encrypted = ?, proxy_id = NULLIF(?, ''),
 			proxy_enabled = ?, proxy_type = ?, proxy_host = ?, proxy_port = ?,
 			proxy_username_encrypted = ?, proxy_password_encrypted = ?,
 			updated_at = ?
 		 WHERE id = ?`,
-		u.Name, u.Type, boolToInt(u.Enabled), u.ConfigEncrypted,
+		u.Name, u.Type, boolToInt(u.Enabled), u.ConfigEncrypted, u.ProxyID,
 		boolToInt(u.ProxyEnabled), u.ProxyType, u.ProxyHost, u.ProxyPort,
 		u.ProxyUsernameEncrypted, u.ProxyPasswordEncrypted,
 		u.UpdatedAt, u.ID,
@@ -337,7 +356,7 @@ func (s *Store) UpdateUpstream(ctx context.Context, u *Upstream) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // UpdateUpstreamConfigEncrypted persists refreshed OAuth tokens without bumping updated_at
@@ -371,22 +390,20 @@ func (s *Store) DeleteUpstream(ctx context.Context, id string) error {
 	return nil
 }
 
+const upstreamSelect = `SELECT u.id, u.name, u.type, u.enabled, u.config_encrypted,
+	CASE WHEN p.id IS NOT NULL THEN 1 ELSE u.proxy_enabled END,
+	COALESCE(p.type, u.proxy_type), COALESCE(p.host, u.proxy_host), COALESCE(p.port, u.proxy_port),
+	COALESCE(p.username_encrypted, u.proxy_username_encrypted), COALESCE(p.password_encrypted, u.proxy_password_encrypted),
+	u.last_test_status, u.last_test_error, u.last_tested_at, u.created_at, u.updated_at,
+	COALESCE(u.proxy_id, ''), COALESCE(p.name, '')
+	FROM upstreams u LEFT JOIN proxies p ON p.id=u.proxy_id`
+
 func (s *Store) GetUpstreamByID(ctx context.Context, id string) (*Upstream, error) {
-	return s.scanUpstream(s.db.QueryRowContext(ctx,
-		`SELECT id, name, type, enabled, config_encrypted,
-			proxy_enabled, proxy_type, proxy_host, proxy_port,
-			proxy_username_encrypted, proxy_password_encrypted,
-			last_test_status, last_test_error, last_tested_at, created_at, updated_at
-		 FROM upstreams WHERE id = ?`, id))
+	return s.scanUpstream(s.db.QueryRowContext(ctx, upstreamSelect+` WHERE u.id = ?`, id))
 }
 
 func (s *Store) ListUpstreams(ctx context.Context) ([]Upstream, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, type, enabled, config_encrypted,
-			proxy_enabled, proxy_type, proxy_host, proxy_port,
-			proxy_username_encrypted, proxy_password_encrypted,
-			last_test_status, last_test_error, last_tested_at, created_at, updated_at
-		 FROM upstreams ORDER BY created_at ASC`)
+	rows, err := s.db.QueryContext(ctx, upstreamSelect+` ORDER BY u.created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -412,6 +429,7 @@ func (s *Store) scanUpstream(row rowScanner) (*Upstream, error) {
 		&proxyEnabled, &u.ProxyType, &u.ProxyHost, &u.ProxyPort,
 		&u.ProxyUsernameEncrypted, &u.ProxyPasswordEncrypted,
 		&u.LastTestStatus, &u.LastTestError, &testedAt, &u.CreatedAt, &u.UpdatedAt,
+		&u.ProxyID, &u.ProxyName,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound

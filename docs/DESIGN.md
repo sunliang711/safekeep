@@ -98,7 +98,7 @@ safekeep/
 | `updated_at` | DATETIME | 更新时间 |
 | `updated_by` | TEXT | 操作管理员 ID |
 
-### 3.3 `upstreams`（上游存储与独立代理配置）
+### 3.3 `upstreams`（上游存储与共享代理引用）
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
 | `id` | TEXT PK | 上游唯一 ID（如 `up_01...`） |
@@ -106,7 +106,8 @@ safekeep/
 | `type` | TEXT | `s3` \| `dropbox` |
 | `enabled` | INTEGER | 是否启用 |
 | `config_encrypted` | TEXT | AES-GCM 加密的 JSON（见下方说明） |
-| `proxy_enabled` | INTEGER | 是否启用网络代理 |
+| `proxy_id` | TEXT NULL | FK -> `proxies.id`，NULL 表示直连；引用中的代理禁止删除 |
+| `proxy_enabled` | INTEGER | 兼容旧版内嵌代理配置，读取时以 `proxy_id` 关联的代理为准 |
 | `proxy_type` | TEXT | `http` \| `https` \| `socks5` |
 | `proxy_host` | TEXT | 代理主机 |
 | `proxy_port` | INTEGER | 代理端口 |
@@ -220,7 +221,11 @@ safekeep/
 1. 启动时若未设置环境变量 `SAFEKEEP_MASTER_KEY`，程序自动在数据目录生成 32 字节随机主密钥文件 `master.key`（权限 `0600`），用于加密所有上游凭证与代理密码。
 2. 若 `admins` 表为空，Web 端自动进入**初始化向导（Setup Wizard）**，引导创建第一个管理员账号，无需修改配置文件或执行 CLI 命令。
 
-### 4.2 每上游独立网络代理（HTTP / SOCKS5）
+### 4.2 每上游选择网络代理（HTTP / HTTPS / SOCKS5）
+代理配置独立存入 `proxies` 表：`id`、唯一 `name`、`type`、`host`、`port`、加密的 `username_encrypted` / `password_encrypted`、`created_at` / `updated_at`。上游通过可空的 `proxy_id` 引用代理，多个上游可以共用；空引用表示直连。更新代理时在同一事务中更新引用上游的版本并重置测试状态，使 Provider 缓存于下次请求重建。外键与删除接口共同保护被引用的代理。
+
+启动升级时，旧内嵌代理在事务中转换为独立记录并绑定，保留原认证密文，重复启动不重复转换。迁移包增加可选代理列表和上游引用，包含未使用的代理；仍支持旧包导入，并保留内嵌快照以兼容旧版读取。合并时按 ID / 名称匹配代理，并映射上游引用。
+
 为每个 `Upstream` 实例构建独立 `http.Client`：
 - **HTTP / HTTPS 代理**：构造 `url.URL`（含可选账密），设置 `Transport.Proxy = http.ProxyURL(u)`。
 - **SOCKS5 代理**：使用 `golang.org/x/net/proxy.SOCKS5("tcp", hostPort, auth, proxy.Direct)`，将 `DialContext` 注入 `http.Transport`。
@@ -307,6 +312,11 @@ Client POST /api/v1/backups?mode=sync|async&targets=up_1,up_2
   - `POST /auth/login`、`POST /auth/logout`、`GET /auth/me`、`PUT /auth/password`
 - **仪表盘**：
   - `GET /dashboard/summary`（今日/近 7 天备份量与成功率、队列深度、缓冲盘占用、上游健康状态）
+- **共享代理管理**：
+  - `GET /proxies`、`POST /proxies`、`PUT /proxies/{id}`、`DELETE /proxies/{id}`
+  - `GET /proxies/{id}/secrets`（管理员查看密码，记录审计）
+  - 上游写入时传 `proxy_id`；空字符串表示直连，省略时保留既有选择。
+  - `POST /upstreams/test-proxy` 支持 `proxy_id` 测试已保存代理；编辑代理时仍可提交待保存字段。
 - **上游存储管理**：
   - `GET /upstreams`、`POST /upstreams`、`PUT /upstreams/{id}`、`DELETE /upstreams/{id}`
   - `POST /upstreams/{id}/test`（测试上游存储与 HTTP/SOCKS5 代理连通性）

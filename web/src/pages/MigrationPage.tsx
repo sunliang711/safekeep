@@ -86,6 +86,7 @@ export const MigrationPage: React.FC = () => {
       const res = await api.importMigration(fd)
       toast.success(
         t('migration.importSuccess', {
+          proxies: res.counts.proxies,
           upstreams: res.counts.upstreams,
           clients: res.counts.clients,
           cron: res.counts.cron_jobs,
@@ -278,6 +279,7 @@ export const MigrationPage: React.FC = () => {
               </div>
               <div>
                 {t('migration.inspectCounts', {
+                  proxies: inspectRes.counts.proxies,
                   upstreams: inspectRes.counts.upstreams,
                   clients: inspectRes.counts.clients,
                   cron: inspectRes.counts.cron_jobs,
@@ -285,12 +287,13 @@ export const MigrationPage: React.FC = () => {
                   audit: inspectRes.counts.audit_logs,
                 })}
               </div>
-              {inspectRes.upstream_conflicts?.length || inspectRes.client_conflicts?.length || inspectRes.admin_conflicts?.length ? (
+              {inspectRes.proxy_conflicts?.length || inspectRes.upstream_conflicts?.length || inspectRes.client_conflicts?.length || inspectRes.admin_conflicts?.length ? (
                 <div className="text-amber-700 dark:text-amber-300 flex items-start gap-1">
                   <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
                   <span>
                     {t('migration.conflictsDetected')}
                     {[
+                      inspectRes.proxy_conflicts?.length ? t('migration.conflictProxies', { list: inspectRes.proxy_conflicts.join(', ') }) : '',
                       inspectRes.upstream_conflicts?.length ? t('migration.conflictUpstreams', { list: inspectRes.upstream_conflicts.join(', ') }) : '',
                       inspectRes.client_conflicts?.length ? t('migration.conflictClients', { list: inspectRes.client_conflicts.join(', ') }) : '',
                       inspectRes.admin_conflicts?.length ? t('migration.conflictAdmins', { list: inspectRes.admin_conflicts.join(', ') }) : '',

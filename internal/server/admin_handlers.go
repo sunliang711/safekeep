@@ -245,6 +245,8 @@ type upstreamDTO struct {
 	Type           string         `json:"type"`
 	Enabled        bool           `json:"enabled"`
 	Config         map[string]any `json:"config"`
+	ProxyID        string         `json:"proxy_id"`
+	ProxyName      string         `json:"proxy_name"`
 	ProxyEnabled   bool           `json:"proxy_enabled"`
 	ProxyType      string         `json:"proxy_type"`
 	ProxyHost      string         `json:"proxy_host"`
@@ -288,6 +290,8 @@ func (s *Server) toUpstreamDTO(u db.Upstream) upstreamDTO {
 		Type:           u.Type,
 		Enabled:        u.Enabled,
 		Config:         cfgMap,
+		ProxyID:        u.ProxyID,
+		ProxyName:      u.ProxyName,
 		ProxyEnabled:   u.ProxyEnabled,
 		ProxyType:      u.ProxyType,
 		ProxyHost:      u.ProxyHost,
@@ -307,6 +311,7 @@ type upstreamWriteReq struct {
 	Type          string          `json:"type"`
 	Enabled       bool            `json:"enabled"`
 	Config        json.RawMessage `json:"config"`
+	ProxyID       *string         `json:"proxy_id"`
 	ProxyEnabled  bool            `json:"proxy_enabled"`
 	ProxyType     string          `json:"proxy_type"`
 	ProxyHost     string          `json:"proxy_host"`
@@ -451,6 +456,12 @@ func (s *Server) handleCreateUpstream(w http.ResponseWriter, r *http.Request) {
 		ProxyUsernameEncrypted: pUserEnc,
 		ProxyPasswordEncrypted: pPassEnc,
 	}
+	if req.ProxyID != nil {
+		if err := s.applyProxySelection(r.Context(), u, *req.ProxyID); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_proxy", "selected proxy does not exist")
+			return
+		}
+	}
 	if err := s.store.CreateUpstream(r.Context(), u); err != nil {
 		writeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
@@ -544,6 +555,20 @@ func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
 	existing.ProxyPort = req.ProxyPort
 	existing.ProxyUsernameEncrypted = pUserEnc
 	existing.ProxyPasswordEncrypted = pPassEnc
+
+	if req.ProxyID != nil {
+		if err := s.applyProxySelection(r.Context(), existing, *req.ProxyID); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_proxy", "selected proxy does not exist")
+			return
+		}
+	} else if req.ProxyEnabled || req.ProxyType != "" || req.ProxyHost != "" {
+		existing.ProxyID, existing.ProxyName = "", ""
+	} else if existing.ProxyID != "" {
+		if err := s.applyProxySelection(r.Context(), existing, existing.ProxyID); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_proxy", "selected proxy does not exist")
+			return
+		}
+	}
 
 	if err := s.store.UpdateUpstream(r.Context(), existing); err != nil {
 		writeError(w, http.StatusBadRequest, "update_failed", err.Error())
@@ -766,6 +791,7 @@ func (s *Server) handleTestUpstream(w http.ResponseWriter, r *http.Request) {
 }
 
 type testProxyReq struct {
+	ProxyID            string `json:"proxy_id"`
 	UpstreamID         string `json:"upstream_id"`
 	UpstreamType       string `json:"upstream_type"`
 	ProxyType          string `json:"proxy_type"`
@@ -809,6 +835,28 @@ func (s *Server) handleTestUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		Username: strings.TrimSpace(req.ProxyUsername),
 		Password: pPass,
 	}
+	if strings.TrimSpace(req.ProxyID) != "" {
+		p, err := s.store.GetProxyByID(r.Context(), strings.TrimSpace(req.ProxyID))
+		if err != nil {
+			s.writeProxyError(w, err)
+			return
+		}
+		if req.ProxyType == "" && req.ProxyHost == "" {
+			pCfg.Type, pCfg.Host, pCfg.Port = p.Type, p.Host, p.Port
+			pCfg.Username, err = s.cipher.DecryptString(p.UsernameEncrypted)
+			if err != nil {
+				s.writeProxyError(w, err)
+				return
+			}
+		}
+		if isMaskedPlaceholder(req.ProxyPassword) && !req.ClearProxyPassword {
+			pCfg.Password, err = s.cipher.DecryptString(p.PasswordEncrypted)
+			if err != nil {
+				s.writeProxyError(w, err)
+				return
+			}
+		}
+	}
 	if err := pCfg.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_proxy", err.Error())
 		return
@@ -839,13 +887,18 @@ func (s *Server) handleTestUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		errMsg = err.Error()
 	}
 
+	action, resourceType, resourceID := "upstream.test_proxy", "upstream", strings.TrimSpace(req.UpstreamID)
+	if strings.TrimSpace(req.ProxyID) != "" {
+		action, resourceType, resourceID = "proxy.test", "proxy", strings.TrimSpace(req.ProxyID)
+	}
+
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
 		ActorID:      admin.ID,
 		ActorName:    admin.Username,
-		Action:       "upstream.test_proxy",
-		ResourceType: "upstream",
-		ResourceID:   strings.TrimSpace(req.UpstreamID),
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
 		Status:       map[bool]string{true: "success", false: "failure"}[err == nil],
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),

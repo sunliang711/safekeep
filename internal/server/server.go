@@ -148,6 +148,11 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/dashboard/summary", s.handleDashboardSummary)
 
+			r.Get("/proxies", s.handleListProxies)
+			r.Post("/proxies", s.handleSaveProxy)
+			r.Put("/proxies/{id}", s.handleSaveProxy)
+			r.Delete("/proxies/{id}", s.handleDeleteProxy)
+			r.Get("/proxies/{id}/secrets", s.handleRevealProxySecrets)
 			r.Get("/upstreams", s.handleListUpstreams)
 			r.Post("/upstreams", s.handleCreateUpstream)
 			r.Post("/upstreams/test-proxy", s.handleTestUpstreamProxy)

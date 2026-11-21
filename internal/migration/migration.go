@@ -48,6 +48,7 @@ type BundleInclude struct {
 }
 
 type BundleData struct {
+	Proxies         []ProxyRecord       `json:"proxies,omitempty"`
 	SystemSettings  []SettingRecord     `json:"system_settings"`
 	Upstreams       []UpstreamRecord    `json:"upstreams"`
 	Clients         []ClientRecord      `json:"clients"`
@@ -67,6 +68,7 @@ type SettingRecord struct {
 }
 
 type UpstreamRecord struct {
+	ProxyID         string     `json:"proxy_id,omitempty"`
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
 	Type            string     `json:"type"`
@@ -118,6 +120,7 @@ type AdminRecord struct {
 
 // InspectSummary describes the contents and potential conflicts of an uploaded bundle.
 type InspectSummary struct {
+	ProxyConflicts     []string      `json:"proxy_conflicts"`
 	FormatVersion      int           `json:"format_version"`
 	ExportedAt         time.Time     `json:"exported_at"`
 	Includes           BundleInclude `json:"includes"`
@@ -128,6 +131,7 @@ type InspectSummary struct {
 }
 
 type BundleCounts struct {
+	Proxies         int `json:"proxies"`
 	SystemSettings  int `json:"system_settings"`
 	Upstreams       int `json:"upstreams"`
 	Clients         int `json:"clients"`
@@ -185,6 +189,11 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 	}
 	rows.Close()
 
+	data.Proxies, err = s.exportProxies(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	// 2. Upstreams
 	ups, err := s.store.ListUpstreams(ctx)
 	if err != nil {
@@ -204,6 +213,7 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 			return nil, fmt.Errorf("decrypt upstream %s proxy password: %w", u.Name, err)
 		}
 		data.Upstreams = append(data.Upstreams, UpstreamRecord{
+			ProxyID:         u.ProxyID,
 			ID:              u.ID,
 			Name:            u.Name,
 			Type:            u.Type,
@@ -391,6 +401,7 @@ func (s *Service) Inspect(ctx context.Context, encrypted []byte, passphrase stri
 		ExportedAt:    b.ExportedAt,
 		Includes:      b.Includes,
 		Counts: BundleCounts{
+			Proxies:         len(b.Data.Proxies),
 			SystemSettings:  len(b.Data.SystemSettings),
 			Upstreams:       len(b.Data.Upstreams),
 			Clients:         len(b.Data.Clients),
@@ -402,6 +413,10 @@ func (s *Service) Inspect(ctx context.Context, encrypted []byte, passphrase stri
 		},
 	}
 
+	summary.ProxyConflicts, err = s.proxyConflicts(ctx, b.Data.Proxies)
+	if err != nil {
+		return nil, err
+	}
 	existingUps, _ := s.store.ListUpstreams(ctx)
 	upNames := make(map[string]bool)
 	for _, u := range existingUps {
@@ -488,6 +503,9 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		if _, err := tx.ExecContext(ctx, `DELETE FROM upstreams`); err != nil {
 			return nil, err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM proxies`); err != nil {
+			return nil, err
+		}
 		if opts.IncludeAuditLogs && b.Includes.AuditLogs {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM audit_logs`); err != nil {
 				return nil, err
@@ -536,6 +554,12 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		counts.SystemSettings++
 	}
 
+	proxyIDMap, proxyCount, err := s.importProxies(ctx, tx, b.Data.Proxies, mode, conflict)
+	if err != nil {
+		return nil, err
+	}
+	counts.Proxies = proxyCount
+
 	// 2. Upstreams (re-encrypt with target master key; avoid DELETE to preserve foreign keys)
 	for _, u := range b.Data.Upstreams {
 		cfgEnc, err := s.cipher.EncryptString(u.ConfigPlainJSON)
@@ -571,23 +595,31 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 			targetID = existingByName
 		}
 		upstreamIDMap[u.ID] = targetID
+		proxyID := ""
+		if u.ProxyID != "" {
+			var ok bool
+			proxyID, ok = proxyIDMap[u.ProxyID]
+			if !ok {
+				return nil, fmt.Errorf("upstream references missing proxy %q", u.ProxyID)
+			}
+		}
 
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO upstreams(
-				id, name, type, enabled, config_encrypted,
+				id, name, type, enabled, config_encrypted, proxy_id,
 				proxy_enabled, proxy_type, proxy_host, proxy_port,
 				proxy_username_encrypted, proxy_password_encrypted,
 				last_test_status, last_test_error, last_tested_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name, type=excluded.type, enabled=excluded.enabled,
-				config_encrypted=excluded.config_encrypted,
+				config_encrypted=excluded.config_encrypted, proxy_id=excluded.proxy_id,
 				proxy_enabled=excluded.proxy_enabled, proxy_type=excluded.proxy_type,
 				proxy_host=excluded.proxy_host, proxy_port=excluded.proxy_port,
 				proxy_username_encrypted=excluded.proxy_username_encrypted,
 				proxy_password_encrypted=excluded.proxy_password_encrypted,
 				updated_at=excluded.updated_at`,
-			targetID, u.Name, u.Type, boolInt(u.Enabled), cfgEnc,
+			targetID, u.Name, u.Type, boolInt(u.Enabled), cfgEnc, proxyID,
 			boolInt(u.ProxyEnabled), u.ProxyType, u.ProxyHost, u.ProxyPort,
 			pUserEnc, pPassEnc,
 			u.LastTestStatus, u.LastTestError, u.LastTestedAt, u.CreatedAt, u.UpdatedAt,
@@ -596,6 +628,16 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 		}
 		counts.Upstreams++
 	}
+
+	var legacyProxyCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstreams WHERE proxy_id IS NULL AND proxy_enabled=1`).Scan(&legacyProxyCount); err != nil {
+		return nil, err
+	}
+	if err := db.MigrateLegacyProxies(ctx, tx); err != nil {
+		return nil, err
+	}
+
+	counts.Proxies += legacyProxyCount
 
 	// 3. Clients (re-encrypt webhook secret and API key, keep key_hash intact, update in-place on conflict to prevent CASCADE delete of tasks)
 	for _, c := range b.Data.Clients {

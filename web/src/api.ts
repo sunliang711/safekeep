@@ -12,6 +12,7 @@ import type {
   SMTPConfig,
   SystemSettings,
   Upstream,
+  NetworkProxy,
 } from './types'
 
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -61,6 +62,12 @@ export const api = {
 
   dashboard: () => req<DashboardSummary>('/admin/api/v1/dashboard/summary'),
 
+  listProxies: () => req<{ items: NetworkProxy[] }>('/admin/api/v1/proxies'),
+  createProxy: (payload: any) => req<NetworkProxy>('/admin/api/v1/proxies', { method: 'POST', body: JSON.stringify(payload) }),
+  updateProxy: (id: string, payload: any) => req<NetworkProxy>(`/admin/api/v1/proxies/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteProxy: (id: string) => req(`/admin/api/v1/proxies/${id}`, { method: 'DELETE' }),
+  revealProxySecrets: (id: string) => req<{ password: string }>(`/admin/api/v1/proxies/${id}/secrets`),
+
   listUpstreams: () => req<{ items: Upstream[] }>('/admin/api/v1/upstreams'),
   createUpstream: (payload: any) =>
     req<Upstream>('/admin/api/v1/upstreams', { method: 'POST', body: JSON.stringify(payload) }),
@@ -70,11 +77,12 @@ export const api = {
   testUpstream: (id: string) =>
     req<{ status: string; error?: string }>(`/admin/api/v1/upstreams/${id}/test`, { method: 'POST' }),
   testUpstreamProxy: (payload: {
+    proxy_id?: string
     upstream_id?: string
     upstream_type?: string
-    proxy_type: string
-    proxy_host: string
-    proxy_port: number
+    proxy_type?: string
+    proxy_host?: string
+    proxy_port?: number
     proxy_username?: string
     proxy_password?: string
     clear_proxy_password?: boolean

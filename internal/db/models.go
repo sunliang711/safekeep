@@ -18,6 +18,8 @@ type Upstream struct {
 	Type                   string     `json:"type"` // s3 | dropbox
 	Enabled                bool       `json:"enabled"`
 	ConfigEncrypted        string     `json:"-"`
+	ProxyID                string     `json:"proxy_id"`
+	ProxyName              string     `json:"proxy_name"`
 	ProxyEnabled           bool       `json:"proxy_enabled"`
 	ProxyType              string     `json:"proxy_type"` // http | https | socks5
 	ProxyHost              string     `json:"proxy_host"`
@@ -29,6 +31,19 @@ type Upstream struct {
 	LastTestedAt           *time.Time `json:"last_tested_at,omitempty"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
+}
+
+type Proxy struct {
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Type              string    `json:"type"`
+	Host              string    `json:"host"`
+	Port              int       `json:"port"`
+	UsernameEncrypted string    `json:"-"`
+	PasswordEncrypted string    `json:"-"`
+	UpstreamCount     int       `json:"upstream_count"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type Client struct {
