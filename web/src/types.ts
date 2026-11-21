@@ -235,6 +235,9 @@ export interface InspectSummary {
     audit_logs: boolean;
   };
   counts: {
+    remote_hosts: number;
+    remote_jobs: number;
+    remote_runs: number;
     proxies: number;
     system_settings: number;
     upstreams: number;
@@ -249,4 +252,53 @@ export interface InspectSummary {
   upstream_conflicts: string[];
   client_conflicts: string[];
   admin_conflicts: string[];
+}
+
+export interface RemoteHost {
+  id: string;
+  name: string;
+  address: string;
+  port: number;
+  username: string;
+  public_key: string;
+  fingerprint: string;
+  platform: string;
+  archive_tool: string;
+  health_status: string;
+  health_error: string;
+  checked_at?: string;
+}
+
+export interface RemoteJob {
+  id: string;
+  name: string;
+  host_id: string;
+  directories: { path: string; excludes: string[] }[];
+  upstream_ids: string[];
+  parent_path: string;
+  cron_expr: string;
+  timezone: string;
+  enabled: boolean;
+  timeout_sec: number;
+}
+
+export interface RemoteRun {
+  id: string;
+  job_id: string;
+  job_name: string;
+  host_id: string;
+  trigger: string;
+  status: string;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+  archives: {
+    source_path: string;
+    filename: string;
+    status: string;
+    error?: string;
+    size: number;
+    sha256?: string;
+    uploads: { upstream_id: string; upstream_name: string; remote_path: string; status: string; attempts: number; error?: string }[];
+  }[];
 }

@@ -48,6 +48,9 @@ type BundleInclude struct {
 }
 
 type BundleData struct {
+	RemoteHosts     []RemoteHostRecord  `json:"remote_hosts,omitempty"`
+	RemoteJobs      []db.RemoteJob      `json:"remote_jobs,omitempty"`
+	RemoteRuns      []db.RemoteRun      `json:"remote_runs,omitempty"`
 	Proxies         []ProxyRecord       `json:"proxies,omitempty"`
 	SystemSettings  []SettingRecord     `json:"system_settings"`
 	Upstreams       []UpstreamRecord    `json:"upstreams"`
@@ -131,6 +134,9 @@ type InspectSummary struct {
 }
 
 type BundleCounts struct {
+	RemoteHosts     int `json:"remote_hosts"`
+	RemoteJobs      int `json:"remote_jobs"`
+	RemoteRuns      int `json:"remote_runs"`
 	Proxies         int `json:"proxies"`
 	SystemSettings  int `json:"system_settings"`
 	Upstreams       int `json:"upstreams"`
@@ -327,6 +333,10 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 		data.AuditLogs = logs
 	}
 
+	if err := s.exportRemote(ctx, &data, opts.IncludeTasks); err != nil {
+		return nil, err
+	}
+
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
@@ -401,6 +411,9 @@ func (s *Service) Inspect(ctx context.Context, encrypted []byte, passphrase stri
 		ExportedAt:    b.ExportedAt,
 		Includes:      b.Includes,
 		Counts: BundleCounts{
+			RemoteHosts:     len(b.Data.RemoteHosts),
+			RemoteJobs:      len(b.Data.RemoteJobs),
+			RemoteRuns:      len(b.Data.RemoteRuns),
 			Proxies:         len(b.Data.Proxies),
 			SystemSettings:  len(b.Data.SystemSettings),
 			Upstreams:       len(b.Data.Upstreams),
@@ -486,6 +499,17 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 	defer tx.Rollback()
 
 	if mode == "replace" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM remote_backup_jobs`); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM remote_hosts`); err != nil {
+			return nil, err
+		}
+		if opts.IncludeTasks && b.Includes.Tasks {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM remote_backup_runs`); err != nil {
+				return nil, err
+			}
+		}
 		if opts.IncludeTasks && b.Includes.Tasks {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM backup_task_items`); err != nil {
 				return nil, err
@@ -767,6 +791,10 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 			return nil, err
 		}
 		counts.CronJobs++
+	}
+
+	if err := s.importRemote(ctx, tx, b.Data, upstreamIDMap, mode, conflict, opts.IncludeTasks && b.Includes.Tasks, counts); err != nil {
+		return nil, err
 	}
 
 	// 6. Optional Admins (handle username uniqueness safely)

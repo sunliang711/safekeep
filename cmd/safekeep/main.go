@@ -20,6 +20,7 @@ import (
 	"safekeep/internal/db"
 	"safekeep/internal/migration"
 	"safekeep/internal/queue"
+	"safekeep/internal/remote"
 	"safekeep/internal/scheduler"
 	"safekeep/internal/server"
 	"safekeep/internal/storage"
@@ -120,6 +121,11 @@ func main() {
 	pool := queue.NewWorkerPool(store, backupSvc, settings.WorkerConcurrency, logger)
 	backupSvc.SetEnqueuer(pool)
 	pool.Start(appCtx)
+	remoteSvc := remote.NewService(appCtx, store, cipher, registry, backupSvc, auditLog, logger)
+	if err := remoteSvc.Start(); err != nil {
+		logger.Error("start remote backup service failed", "err", err)
+		os.Exit(1)
+	}
 
 	migSvc := migration.NewService(store, cipher)
 	sched := scheduler.NewEngine(appCtx, store, registry, auditLog, logger)
@@ -135,6 +141,7 @@ func main() {
 	}
 
 	srv := server.New(store, cipher, registry, backupSvc, pool, sched, migSvc, auditLog, logger, webFS)
+	srv.SetRemoteService(remoteSvc)
 	srv.SetVersion(version)
 	srv.SetCORSOrigins(boot.CORSAllowedOrigins)
 	httpSrv := &http.Server{
@@ -159,6 +166,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
+	remoteSvc.Stop()
 	sched.Stop()
 	cancel()
 	pool.Wait()

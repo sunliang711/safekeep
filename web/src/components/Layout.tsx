@@ -5,6 +5,7 @@ import {
   Clock,
   FileArchive,
   HardDrive,
+  Server,
   KeyRound,
   LogOut,
   Menu,
@@ -19,7 +20,7 @@ import type { TranslationKey } from '../i18n/zh'
 import { PreferenceControls } from './PreferenceControls'
 import type { Admin } from '../types'
 
-export type NavTab = 'dashboard' | 'tasks' | 'upstreams' | 'clients' | 'cron' | 'audit' | 'migration' | 'settings'
+export type NavTab = 'dashboard' | 'remote-backups' | 'tasks' | 'upstreams' | 'clients' | 'cron' | 'audit' | 'migration' | 'settings'
 
 interface Props {
   active: NavTab
@@ -35,6 +36,7 @@ const navItems: { id: NavTab; labelKey: TranslationKey; icon: React.ReactNode }[
   { id: 'tasks', labelKey: 'nav.tasks', icon: <FileArchive className="w-4 h-4" /> },
   { id: 'upstreams', labelKey: 'nav.upstreams', icon: <HardDrive className="w-4 h-4" /> },
   { id: 'clients', labelKey: 'nav.clients', icon: <KeyRound className="w-4 h-4" /> },
+  { id: 'remote-backups', labelKey: 'nav.remoteBackups', icon: <Server className="w-4 h-4" /> },
   { id: 'cron', labelKey: 'nav.cron', icon: <Clock className="w-4 h-4" /> },
   { id: 'audit', labelKey: 'nav.audit', icon: <ScrollText className="w-4 h-4" /> },
   { id: 'migration', labelKey: 'nav.migration', icon: <ArrowLeftRight className="w-4 h-4" /> },
@@ -112,7 +114,7 @@ export const Layout: React.FC<Props> = ({ active, onNavigate, admin, version = '
             const isActive = active === item.id
             return (
               <React.Fragment key={item.id}>
-                {(index === 0 || index === 4) && (
+                {(index === 0 || index === 5) && (
                   <div className="text-[10px] text-slate-500 tracking-widest px-3 mb-3 mt-2">
                     {index === 0 ? t('nav.group.workspace') : t('nav.group.admin')}
                   </div>
@@ -126,7 +128,7 @@ export const Layout: React.FC<Props> = ({ active, onNavigate, admin, version = '
                     setMenuOpen(false)
                     onNavigate(item.id)
                   }}
-                  className={`w-full flex items-center gap-3 px-3 py-3 mb-1 rounded-xl text-[13px] transition ${isActive ? 'bg-indigo-500 text-white font-medium shadow-md shadow-indigo-950/20' : 'text-slate-400 hover:bg-white/5 hover:text-white'} ${index === 3 ? 'mb-7' : ''}`}
+                  className={`w-full flex items-center gap-3 px-3 py-3 mb-1 rounded-xl text-[13px] transition ${isActive ? 'bg-indigo-500 text-white font-medium shadow-md shadow-indigo-950/20' : 'text-slate-400 hover:bg-white/5 hover:text-white'} ${index === 4 ? 'mb-7' : ''}`}
                 >
                   {item.icon}<span>{t(item.labelKey)}</span>
                   {isActive && <ChevronRight className="w-3.5 h-3.5 ml-auto opacity-70" />}

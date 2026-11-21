@@ -9,6 +9,7 @@ import { AuthPage } from './pages/AuthPages'
 import { ClientsPage } from './pages/ClientsPage'
 import { CronPage } from './pages/CronPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { RemoteBackupsPage } from './pages/RemoteBackupsPage'
 import { MigrationPage } from './pages/MigrationPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TasksPage } from './pages/TasksPage'
@@ -17,6 +18,7 @@ import type { Admin } from './types'
 
 function initialTab(): NavTab {
   const p = window.location.pathname
+  if (p.startsWith('/remote-backups')) return 'remote-backups'
   if (p.startsWith('/upstreams')) return 'upstreams'
   if (p.startsWith('/clients')) return 'clients'
   if (p.startsWith('/tasks')) return 'tasks'
@@ -124,6 +126,7 @@ export function App() {
       >
         {tab === 'dashboard' && <DashboardPage onNavigate={navigate} />}
         {tab === 'tasks' && <TasksPage onNavigate={navigate} />}
+        {tab === 'remote-backups' && <RemoteBackupsPage />}
         {tab === 'upstreams' && <UpstreamsPage />}
         {tab === 'clients' && <ClientsPage />}
         {tab === 'cron' && <CronPage />}

@@ -287,6 +287,7 @@ export const MigrationPage: React.FC = () => {
                   audit: inspectRes.counts.audit_logs,
                 })}
               </div>
+              <div>{t('remote.migrationCounts', { hosts: inspectRes.counts.remote_hosts, jobs: inspectRes.counts.remote_jobs, runs: inspectRes.counts.remote_runs })}</div>
               {inspectRes.proxy_conflicts?.length || inspectRes.upstream_conflicts?.length || inspectRes.client_conflicts?.length || inspectRes.admin_conflicts?.length ? (
                 <div className="text-amber-700 dark:text-amber-300 flex items-start gap-1">
                   <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />

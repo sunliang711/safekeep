@@ -9,6 +9,15 @@ import type { TranslationKey } from '../i18n/zh'
 import type { AuditLog } from '../types'
 
 const ACTION_KEYS: Record<string, TranslationKey> = {
+  'remote_host.save': 'audit.action.remote_host.save',
+  'remote_host.delete': 'audit.action.remote_host.delete',
+  'remote_host.check': 'audit.action.remote_host.check',
+  'remote_backup.save': 'audit.action.remote_backup.save',
+  'remote_backup.delete': 'audit.action.remote_backup.delete',
+  'remote_backup.run': 'audit.action.remote_backup.run',
+  'remote_backup.retry': 'audit.action.remote_backup.retry',
+  'remote_backup.execute': 'audit.action.remote_backup.execute',
+
   'backup.upload': 'audit.action.backup.upload',
   'backup.web_upload': 'audit.action.backup.web_upload',
   'backup.download': 'audit.action.backup.download',
@@ -51,6 +60,10 @@ const ACTION_KEYS: Record<string, TranslationKey> = {
 }
 
 const RESOURCE_KEYS: Record<string, TranslationKey> = {
+  remote_host: 'audit.resource.remote_host',
+  remote_backup_job: 'audit.resource.remote_backup_job',
+  remote_backup_run: 'audit.resource.remote_backup_run',
+
   admin: 'audit.resource.admin',
   proxy: 'audit.resource.proxy',
   upstream: 'audit.resource.upstream',
@@ -74,6 +87,7 @@ const CRON_JOB_KEYS: Record<string, TranslationKey> = {
 }
 
 const ACTION_GROUPS: { labelKey: TranslationKey; actions: string[] }[] = [
+  { labelKey: 'audit.actionGroup.remote', actions: ['remote_host.save', 'remote_host.delete', 'remote_host.check', 'remote_backup.save', 'remote_backup.delete', 'remote_backup.run', 'remote_backup.retry', 'remote_backup.execute'] },
   {
     labelKey: 'audit.actionGroup.backup',
     actions: ['backup.upload', 'backup.web_upload', 'backup.download', 'task.download', 'task.retry'],

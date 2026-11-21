@@ -255,6 +255,9 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("exec migration: %w", err)
 		}
 	}
+	if err := s.migrateRemoteBackups(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureColumn(ctx, "clients", "key_encrypted", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensure clients.key_encrypted: %w", err)
 	}

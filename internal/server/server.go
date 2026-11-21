@@ -26,6 +26,7 @@ import (
 	"safekeep/internal/db"
 	"safekeep/internal/migration"
 	"safekeep/internal/queue"
+	"safekeep/internal/remote"
 	"safekeep/internal/scheduler"
 	"safekeep/internal/storage"
 )
@@ -45,6 +46,7 @@ type Server struct {
 	jwtSecret []byte
 	registry  *storage.Registry
 	backupSvc *backup.Service
+	remoteSvc *remote.Service
 	pool      *queue.WorkerPool
 	sched     *scheduler.Engine
 	migSvc    *migration.Service
@@ -147,6 +149,7 @@ func (s *Server) Router() http.Handler {
 			r.Put("/auth/password", s.handleAdminChangePassword)
 
 			r.Get("/dashboard/summary", s.handleDashboardSummary)
+			s.registerRemoteRoutes(r)
 
 			r.Get("/proxies", s.handleListProxies)
 			r.Post("/proxies", s.handleSaveProxy)

@@ -13,6 +13,9 @@ import type {
   SystemSettings,
   Upstream,
   NetworkProxy,
+  RemoteHost,
+  RemoteJob,
+  RemoteRun,
 } from './types'
 
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -61,6 +64,19 @@ export const api = {
     }),
 
   dashboard: () => req<DashboardSummary>('/admin/api/v1/dashboard/summary'),
+
+  listRemoteHosts: () => req<{ items: RemoteHost[] }>('/admin/api/v1/remote-backups/hosts'),
+  saveRemoteHost: (id: string | undefined, payload: { name: string; address: string; port: number; username: string }) =>
+    req<RemoteHost>(`/admin/api/v1/remote-backups/hosts${id ? `/${id}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }),
+  deleteRemoteHost: (id: string) => req(`/admin/api/v1/remote-backups/hosts/${id}`, { method: 'DELETE' }),
+  checkRemoteHost: (id: string) => req<RemoteHost>(`/admin/api/v1/remote-backups/hosts/${id}/check`, { method: 'POST' }),
+  listRemoteJobs: () => req<{ items: RemoteJob[] }>('/admin/api/v1/remote-backups/jobs'),
+  saveRemoteJob: (id: string | undefined, payload: Omit<RemoteJob, 'id'>) =>
+    req<RemoteJob>(`/admin/api/v1/remote-backups/jobs${id ? `/${id}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }),
+  deleteRemoteJob: (id: string) => req(`/admin/api/v1/remote-backups/jobs/${id}`, { method: 'DELETE' }),
+  runRemoteJob: (id: string) => req<RemoteRun>(`/admin/api/v1/remote-backups/jobs/${id}/run`, { method: 'POST' }),
+  listRemoteRuns: (jobID = '') => req<{ items: RemoteRun[] }>(`/admin/api/v1/remote-backups/runs?${new URLSearchParams({ job_id: jobID })}`),
+  retryRemoteRun: (id: string) => req<RemoteRun>(`/admin/api/v1/remote-backups/runs/${id}/retry`, { method: 'POST' }),
 
   listProxies: () => req<{ items: NetworkProxy[] }>('/admin/api/v1/proxies'),
   createProxy: (payload: any) => req<NetworkProxy>('/admin/api/v1/proxies', { method: 'POST', body: JSON.stringify(payload) }),

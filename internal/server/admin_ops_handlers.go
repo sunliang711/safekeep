@@ -896,6 +896,11 @@ func (s *Server) handleMigrationImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.registry.InvalidateAll()
+	if s.remoteSvc != nil {
+		if err := s.remoteSvc.Reload(r.Context()); err != nil {
+			s.logger.Error("reload remote backup schedules failed", "err", err)
+		}
+	}
 	if s.sched != nil {
 		_ = s.sched.ReloadAll(r.Context())
 	}
