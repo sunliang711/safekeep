@@ -74,7 +74,7 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
       </div>
 
       {total > 0 ? (
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+        <div className="mt-5 grid grid-cols-1 md:grid-cols-[16rem_minmax(0,20rem)] justify-center gap-6 items-center">
           <div className="flex flex-col items-center gap-2">
             <svg viewBox="0 0 240 240" className="w-56 h-56 sm:w-64 sm:h-64" role="img" aria-label={t('dashboard.uploads.chartAria', { total: number(total) })}>
               {counts.map((item) => {
@@ -83,6 +83,8 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
                 angle += sweep
                 const label = t('dashboard.uploads.slice', { name: item.client_name, count: number(item.upload_count), percent: ((item.upload_count / total) * 100).toFixed(1) })
                 const active = activeItem?.client_id === item.client_id
+                // 仅扩出当前扇区的外沿，保持圆心、角度及其它扇区不变。
+                const radius = active ? 106 : 100
                 const updateHover = (event: React.PointerEvent<SVGGElement>) => {
                   if (event.pointerType === 'touch') return
                   setHovered({ clientID: item.client_id, x: event.clientX, y: event.clientY })
@@ -95,17 +97,15 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
                     onPointerEnter={updateHover}
                     onPointerMove={updateHover}
                     onPointerLeave={() => setHovered(null)}
-                    className="transition-[opacity,filter] duration-150"
-                    style={{ opacity: activeItem && !active ? 0.35 : 1, filter: active ? 'brightness(1.15)' : undefined }}
                   >
                     {counts.length === 1 ? (
-                      <circle cx="120" cy="120" r="100" fill={clientColors.get(item.client_id)} />
+                      <circle cx="120" cy="120" r={radius} fill={clientColors.get(item.client_id)} />
                     ) : (
                       <path
-                        d={`M 120 120 L ${120 + 100 * Math.cos(start)} ${120 + 100 * Math.sin(start)} A 100 100 0 ${sweep > Math.PI ? 1 : 0} 1 ${120 + 100 * Math.cos(angle)} ${120 + 100 * Math.sin(angle)} Z`}
+                        d={`M 120 120 L ${120 + radius * Math.cos(start)} ${120 + radius * Math.sin(start)} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${120 + radius * Math.cos(angle)} ${120 + radius * Math.sin(angle)} Z`}
                         fill={clientColors.get(item.client_id)}
                         className="stroke-white dark:stroke-slate-900"
-                        strokeWidth={active ? 3 : 2}
+                        strokeWidth={2}
                       />
                     )}
                   </g>
@@ -116,13 +116,13 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
               {t('dashboard.uploads.total', { count: number(total) })}
             </p>
           </div>
-          <ul className="space-y-1 max-h-72 overflow-y-auto" aria-label={t('dashboard.uploads.legend')}>
+          <ul className="w-full min-w-0 max-w-sm justify-self-center space-y-1 max-h-72 overflow-y-auto" aria-label={t('dashboard.uploads.legend')}>
             {counts.map((item) => (
               <li key={item.client_id} className="flex items-center gap-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 text-sm">
                 <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: clientColors.get(item.client_id) }} aria-hidden="true" />
                 <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200" title={`${item.client_name} (${item.client_id})`}>{item.client_name}</span>
-                <span className="font-semibold tabular-nums text-slate-900 dark:text-slate-100">{number(item.upload_count)}</span>
-                <span className="w-16 text-right tabular-nums text-xs text-slate-500 dark:text-slate-400">{((item.upload_count / total) * 100).toFixed(1)}%</span>
+                <span className="shrink-0 font-semibold tabular-nums text-slate-900 dark:text-slate-100">{number(item.upload_count)}</span>
+                <span className="w-14 shrink-0 text-right tabular-nums text-xs text-slate-500 dark:text-slate-400">{((item.upload_count / total) * 100).toFixed(1)}%</span>
               </li>
             ))}
           </ul>
