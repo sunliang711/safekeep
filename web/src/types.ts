@@ -280,6 +280,7 @@ export interface RemoteJob {
   timezone: string;
   enabled: boolean;
   timeout_sec: number;
+  next_run_at?: string;
 }
 
 export interface RemoteRun {

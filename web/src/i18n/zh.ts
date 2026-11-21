@@ -939,6 +939,8 @@ export const zh = {
   'remote.noUpstreams': '请先添加并启用至少一个上游。',
   'remote.schedule': 'Cron 表达式',
   'remote.timezone': '任务时区',
+  'remote.invalidTimezone': '请输入有效的任务时区',
+  'remote.pausedPreview': '调度已暂停，以上仅为计划预览；启用后才会自动执行。',
   'remote.timeout': '执行超时（秒）',
   'remote.enableSchedule': '启用定时执行',
   'remote.runDetail': '备份执行详情',

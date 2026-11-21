@@ -5,16 +5,34 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"safekeep/internal/audit"
 	"safekeep/internal/db"
 	"safekeep/internal/remote"
+	"safekeep/internal/scheduler"
 )
 
 type remoteHostDTO db.RemoteHost
 type remoteJobDTO db.RemoteJob
 type remoteRunDTO db.RemoteRun
+
+type remoteJobResponse struct {
+	remoteJobDTO
+	NextRunAt *time.Time `json:"next_run_at,omitempty"`
+}
+
+func newRemoteJobResponse(j db.RemoteJob) remoteJobResponse {
+	out := remoteJobResponse{remoteJobDTO: remoteJobDTO(j)}
+	// 与实际调度使用相同的时区，暂停任务不返回下次执行时间。
+	if j.Enabled {
+		if next, err := scheduler.PreviewCron("CRON_TZ="+j.Timezone+" "+j.CronExpr, 1); err == nil && len(next) > 0 {
+			out.NextRunAt = &next[0]
+		}
+	}
+	return out
+}
 
 type remoteHostRequest struct {
 	Name     string `json:"name"`
@@ -137,9 +155,9 @@ func (s *Server) handleListRemoteJobs(w http.ResponseWriter, r *http.Request) {
 		s.remoteError(w, err)
 		return
 	}
-	items := make([]remoteJobDTO, 0, len(list))
+	items := make([]remoteJobResponse, 0, len(list))
 	for _, j := range list {
-		items = append(items, remoteJobDTO(j))
+		items = append(items, newRemoteJobResponse(j))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -161,7 +179,7 @@ func (s *Server) handleSaveRemoteJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, remoteJobDTO(model))
+	writeJSON(w, status, newRemoteJobResponse(model))
 }
 
 func (s *Server) handleDeleteRemoteJob(w http.ResponseWriter, r *http.Request) {

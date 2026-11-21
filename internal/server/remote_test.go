@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"safekeep/internal/audit"
+	"safekeep/internal/db"
 	"safekeep/internal/remote"
 )
 
@@ -89,5 +91,86 @@ func TestRemoteAdminAPIProtectsPrivateKeys(t *testing.T) {
 	list := request(http.MethodGet, "/admin/api/v1/remote-backups/hosts", nil)
 	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), before.PrivateKeyEncrypted) {
 		t.Fatal("encrypted key exposed in host list")
+	}
+
+	upstream := db.Upstream{ID: "schedule-upstream", Name: "schedule-upstream", Type: "s3", Enabled: true, ConfigEncrypted: "unused"}
+	if err := env.store.CreateUpstream(context.Background(), &upstream); err != nil {
+		t.Fatal(err)
+	}
+	var jobID string
+	for _, tc := range []struct {
+		name     string
+		timezone string
+		enabled  bool
+	}{
+		{name: "Singapore", timezone: "Asia/Singapore", enabled: true},
+		{name: "UTC", timezone: "UTC", enabled: true},
+		{name: "New York", timezone: "America/New_York", enabled: true},
+		{name: "Paused", timezone: "Asia/Singapore", enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := remoteJobDTO{ID: jobID, Name: "schedule-test", HostID: host.ID, Directories: []db.RemoteDirectory{{Path: "/var/lib/data"}}, UpstreamIDs: []string{upstream.ID}, ParentPath: "vm001", CronExpr: "0 2 * * *", Timezone: tc.timezone, Enabled: tc.enabled, TimeoutSec: 3600}
+			method, path := http.MethodPost, "/admin/api/v1/remote-backups/jobs"
+			if jobID != "" {
+				method, path = http.MethodPut, path+"/"+jobID
+			}
+			saved := request(method, path, payload)
+			if saved.Code != http.StatusOK && saved.Code != http.StatusCreated {
+				t.Fatalf("save job failed: %s", saved.Body.String())
+			}
+			var job remoteJobResponse
+			if err := json.Unmarshal(saved.Body.Bytes(), &job); err != nil {
+				t.Fatal(err)
+			}
+			jobID = job.ID
+			listed := request(http.MethodGet, "/admin/api/v1/remote-backups/jobs", nil)
+			var out struct {
+				Items []remoteJobResponse `json:"items"`
+			}
+			if err := json.Unmarshal(listed.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if listed.Code != http.StatusOK || len(out.Items) != 1 {
+				t.Fatalf("list jobs failed: %s", listed.Body.String())
+			}
+			for _, result := range []remoteJobResponse{job, out.Items[0]} {
+				if !tc.enabled {
+					if result.NextRunAt != nil {
+						t.Fatal("paused job returned a next execution time")
+					}
+					continue
+				}
+				if result.NextRunAt == nil || !result.NextRunAt.After(time.Now()) {
+					t.Fatal("enabled job missing a future execution time")
+				}
+				location, err := time.LoadLocation(tc.timezone)
+				if err != nil {
+					t.Fatal(err)
+				}
+				local := result.NextRunAt.In(location)
+				if local.Hour() != 2 || local.Minute() != 0 || local.Second() != 0 || time.Until(local) > 26*time.Hour {
+					t.Fatalf("next execution does not match daily 02:00 in %s: %s", tc.timezone, local)
+				}
+			}
+			preview := request(http.MethodPost, "/admin/api/v1/cron-jobs/preview", map[string]string{"schedule": "CRON_TZ=" + tc.timezone + " 0 2 * * *"})
+			var upcoming struct {
+				NextRuns []time.Time `json:"next_runs"`
+			}
+			if err := json.Unmarshal(preview.Body.Bytes(), &upcoming); err != nil {
+				t.Fatal(err)
+			}
+			if preview.Code != http.StatusOK || len(upcoming.NextRuns) != 5 {
+				t.Fatalf("expected five preview times: %s", preview.Body.String())
+			}
+			location, err := time.LoadLocation(tc.timezone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, next := range upcoming.NextRuns {
+				if local := next.In(location); local.Hour() != 2 || local.Minute() != 0 {
+					t.Fatalf("preview ignored task time zone %s: %s", tc.timezone, local)
+				}
+			}
+		})
 	}
 }

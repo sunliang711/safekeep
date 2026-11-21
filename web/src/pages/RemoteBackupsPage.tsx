@@ -1,18 +1,28 @@
 import React, { useEffect, useState } from 'react'
-import { Copy, Plus, RefreshCw, Server, ShieldCheck } from 'lucide-react'
+import { Copy, Loader2, Plus, RefreshCw, Server, ShieldCheck } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
 import { useI18n } from '../contexts/I18nContext'
 import { copyText } from '../utils/clipboard'
+import { describeCron } from '../utils/cron'
 import type { RemoteHost, RemoteJob, RemoteRun, Upstream } from '../types'
 
 type HostForm = { id?: string; name: string; address: string; port: number; username: string }
 type JobForm = Omit<RemoteJob, 'id'> & { id?: string }
 
+const SCHEDULE_PRESETS = [
+  { labelKey: 'cron.preset.daily02', value: '0 2 * * *' },
+  { labelKey: 'cron.preset.hourly', value: '0 * * * *' },
+  { labelKey: 'cron.preset.daily', value: '0 4 * * *' },
+  { labelKey: 'cron.preset.weekly', value: '0 5 * * 1' },
+  { labelKey: 'cron.preset.monthly', value: '0 4 1 * *' },
+  { labelKey: 'cron.preset.custom', value: 'custom' },
+] as const
+
 export function RemoteBackupsPage() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const toast = useToast()
   const [hosts, setHosts] = useState<RemoteHost[]>([])
   const [jobs, setJobs] = useState<RemoteJob[]>([])
@@ -21,6 +31,8 @@ export function RemoteBackupsPage() {
   const [tab, setTab] = useState<'jobs' | 'hosts' | 'runs'>('jobs')
   const [hostForm, setHostForm] = useState<HostForm | null>(null)
   const [jobForm, setJobForm] = useState<JobForm | null>(null)
+  const [preset, setPreset] = useState('custom')
+  const [preview, setPreview] = useState<{ schedule: string; times: string[]; error: string; loading: boolean }>({ schedule: '', times: [], error: '', loading: false })
   const [guide, setGuide] = useState<RemoteHost | null>(null)
   const [detailID, setDetailID] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<{ kind: 'hosts' | 'jobs'; id: string; name: string } | null>(null)
@@ -29,6 +41,15 @@ export function RemoteBackupsPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const detail = runs.find(run => run.id === detailID)
+  const previewSchedule = jobForm ? `CRON_TZ=${jobForm.timezone.trim()} ${jobForm.cron_expr.trim()}` : ''
+  const previewLoading = !!jobForm && (preview.schedule !== previewSchedule || preview.loading)
+  const previewError = preview.schedule === previewSchedule ? preview.error : ''
+  const previewTimes = preview.schedule === previewSchedule ? preview.times : []
+  const scheduleTime = (raw: string, timezone: string) => {
+    try { return new Date(raw).toLocaleString(lang === 'en' ? 'en-US' : 'zh-CN', { hour12: false, timeZone: timezone }) }
+    // Go 支持的部分时区名称无法被浏览器识别，此时保留带偏移量的原始时间。
+    catch { return raw }
+  }
 
   const load = async () => {
     try {
@@ -37,6 +58,28 @@ export function RemoteBackupsPage() {
     } catch (e: any) { toast.error(e.message) } finally { setLoading(false) }
   }
   useEffect(() => { void load() }, [])
+  useEffect(() => {
+    if (!jobs.some(job => job.enabled)) return
+    const timer = window.setInterval(() => { void api.listRemoteJobs().then(j => setJobs(j.items)).catch(() => {}) }, 30000)
+    return () => window.clearInterval(timer)
+  }, [jobs.some(job => job.enabled)])
+  useEffect(() => {
+    if (!jobForm) return
+    let cancelled = false
+    const validationError = !jobForm.cron_expr.trim() ? t('cron.errEmptyExpr') : !jobForm.timezone.trim() ? t('remote.invalidTimezone') : ''
+    setPreview({ schedule: previewSchedule, times: [], error: validationError, loading: !validationError })
+    if (validationError) return
+    // 防抖预览并丢弃过期响应，确保切换表达式或时区后只显示当前计划。
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await api.previewCronSchedule(previewSchedule)
+        if (!cancelled) setPreview({ schedule: previewSchedule, times: result.next_runs || [], error: '', loading: false })
+      } catch (e: any) {
+        if (!cancelled) setPreview({ schedule: previewSchedule, times: [], error: e.message || t('cron.errInvalidExpr'), loading: false })
+      }
+    }, 180)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [!!jobForm, previewSchedule, t])
   useEffect(() => {
     if (!runs.some(run => run.status === 'running')) return
     const timer = window.setInterval(() => { void api.listRemoteRuns().then(r => setRuns(r.items)).catch(() => {}) }, 3000)
@@ -51,6 +94,7 @@ export function RemoteBackupsPage() {
   }
   const newJob = () => {
     setError('')
+    setPreset('0 2 * * *')
     setJobForm({ name: '', host_id: hosts[0]?.id || '', directories: [{ path: '', excludes: [] }], upstream_ids: [], parent_path: hosts[0]?.name || '', cron_expr: '0 2 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', enabled: true, timeout_sec: 3600 })
   }
   const field = (label: string, input: React.ReactNode) => <label className="block text-sm font-medium space-y-2"><span>{label}</span>{input}</label>
@@ -88,10 +132,12 @@ export function RemoteBackupsPage() {
         {jobs.map(job => <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-3" key={job.id}>
           <div className="flex flex-wrap justify-between items-center gap-3"><div className="flex gap-3 items-center"><h2 className="font-semibold">{job.name}</h2><StatusBadge value={job.enabled ? 'enabled' : 'disabled'} /></div><div className="flex flex-wrap gap-2">
             <button className="primary-button" disabled={busy || runs.some(run => run.job_id === job.id && run.status === 'running')} onClick={() => void action(async () => { const run = await api.runRemoteJob(job.id); setDetailID(run.id); setTab('runs') }, t('remote.started'))}>{t('remote.run')}</button>
-            <button className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50" onClick={() => { setError(''); setJobForm(JSON.parse(JSON.stringify(job))) }}>{t('common.edit')}</button>
+            <button className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50" onClick={() => { setError(''); setPreset(SCHEDULE_PRESETS.find(option => option.value === job.cron_expr)?.value || 'custom'); setJobForm(JSON.parse(JSON.stringify(job))) }}>{t('common.edit')}</button>
             <button className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 text-rose-500" onClick={() => setDeleting({ kind: 'jobs', id: job.id, name: job.name })}>{t('common.delete')}</button>
           </div></div>
           <p className="text-sm text-slate-500">{hostName(job.host_id)} · <span className="font-mono">{job.cron_expr}</span> · {job.timezone}</p>
+          {describeCron(job.cron_expr, lang) && <p className="text-xs text-slate-500">{describeCron(job.cron_expr, lang)}</p>}
+          <p className="text-xs text-slate-500">{t('cron.colNextRun')}: {job.enabled ? job.next_run_at ? `${scheduleTime(job.next_run_at, job.timezone)} (${job.timezone})` : '—' : t('cron.statusPaused')}</p>
           <div className="text-sm space-y-1">{job.directories.map(dir => <p key={dir.path} className="font-mono break-all">{dir.path}</p>)}</div>
           <p className="text-xs text-slate-500 break-all">{t('remote.destination')}: {job.parent_path}/YYYY/MM/ · {job.upstream_ids.map(id => upstreams.find(u => u.id === id)?.name || id).join(', ')}</p>
           {(() => { const last = runs.find(run => run.job_id === job.id); return last ? <button className="text-sm text-indigo-500 flex items-center gap-2" onClick={() => { setDetailID(last.id); setTab('runs') }}><StatusBadge value={last.status} />{formatTime(last.started_at)}</button> : null })()}
@@ -124,7 +170,7 @@ export function RemoteBackupsPage() {
       </div>
     </Modal>}
     {jobForm && <Modal title={t('remote.jobConfig')} size="xl" busy={busy} onClose={() => setJobForm(null)}>
-      <form className="p-6 space-y-4 bg-white dark:bg-slate-900 rounded-2xl max-h-[calc(100dvh-40px)] overflow-y-auto" onSubmit={e => { e.preventDefault(); void action(async () => { await api.saveRemoteJob(jobForm.id, { ...jobForm, directories: jobForm.directories.map(dir => ({ ...dir, excludes: dir.excludes.filter(pattern => pattern !== '') })) }); setJobForm(null) }, t('common.saved')) }}>
+      <form className="p-6 space-y-4 bg-white dark:bg-slate-900 rounded-2xl max-h-[calc(100dvh-40px)] overflow-y-auto" onSubmit={e => { e.preventDefault(); if (previewLoading || previewError) return; void action(async () => { await api.saveRemoteJob(jobForm.id, { ...jobForm, directories: jobForm.directories.map(dir => ({ ...dir, excludes: dir.excludes.filter(pattern => pattern !== '') })) }); setJobForm(null) }, t('common.saved')) }}>
         <h2 className="text-lg font-semibold">{t('remote.jobConfig')}</h2>
         <div className="grid sm:grid-cols-2 gap-4">{field(t('remote.jobName'), <input className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" required value={jobForm.name} onChange={e => setJobForm({ ...jobForm, name: e.target.value })} />)}{field(t('remote.host'), <select className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" required value={jobForm.host_id} onChange={e => setJobForm({ ...jobForm, host_id: e.target.value })}>{hosts.map(host => <option key={host.id} value={host.id}>{host.name}</option>)}</select>)}</div>
         <fieldset className="space-y-3"><legend className="font-medium text-sm mb-2">{t('remote.directories')}</legend>{jobForm.directories.map((dir, index) => <div key={index} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 space-y-3">
@@ -134,11 +180,24 @@ export function RemoteBackupsPage() {
         {field(t('remote.parentPath'), <input className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" required value={jobForm.parent_path} onChange={e => setJobForm({ ...jobForm, parent_path: e.target.value })} placeholder="vm001" />)}
         <p className="text-xs font-mono text-slate-500 break-all">{jobForm.parent_path || 'vm001'}/YYYY/MM/{encodePath(jobForm.directories[0]?.path || '/var/lib/mysql')}_&lt;{t('remote.runID')}&gt;.tar.gz</p>
         <fieldset><legend className="font-medium text-sm mb-2">{t('remote.upstreams')}</legend><div className="flex flex-wrap gap-4">{upstreams.filter(u => u.enabled).map(upstream => <label className="flex items-center gap-2 text-sm" key={upstream.id}><input type="checkbox" checked={jobForm.upstream_ids.includes(upstream.id)} onChange={e => setJobForm({ ...jobForm, upstream_ids: e.target.checked ? [...jobForm.upstream_ids, upstream.id] : jobForm.upstream_ids.filter(id => id !== upstream.id) })} />{upstream.name}</label>)}</div>{!upstreams.some(u => u.enabled) && <p className="text-sm text-amber-600">{t('remote.noUpstreams')}</p>}</fieldset>
-        <div className="grid sm:grid-cols-3 gap-4">{field(t('remote.schedule'), <input className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full font-mono" required value={jobForm.cron_expr} onChange={e => setJobForm({ ...jobForm, cron_expr: e.target.value })} />)}{field(t('remote.timezone'), <input className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" required value={jobForm.timezone} onChange={e => setJobForm({ ...jobForm, timezone: e.target.value })} placeholder="Asia/Singapore" />)}{field(t('remote.timeout'), <input className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" type="number" min="1" max="86400" required value={jobForm.timeout_sec} onChange={e => setJobForm({ ...jobForm, timeout_sec: Number(e.target.value) })} />)}</div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          {field(t('cron.fieldSchedule'), <select className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" value={preset} onChange={e => { setPreset(e.target.value); if (e.target.value !== 'custom') setJobForm({ ...jobForm, cron_expr: e.target.value }) }}>{SCHEDULE_PRESETS.map(option => <option key={option.value} value={option.value}>{option.value === 'custom' ? t(option.labelKey) : `${t(option.labelKey)} (${option.value})`}</option>)}</select>)}
+          {field(t('remote.timezone'), <input className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" required value={jobForm.timezone} onChange={e => setJobForm({ ...jobForm, timezone: e.target.value })} placeholder="Asia/Singapore" />)}
+        </div>
+        {preset === 'custom' && <div>
+          {field(t('remote.schedule'), <input className={`border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full font-mono ${previewError ? 'border-rose-400' : ''}`} required value={jobForm.cron_expr} onChange={e => setJobForm({ ...jobForm, cron_expr: e.target.value })} aria-invalid={!!previewError} />)}
+          <p className="text-xs text-slate-400 mt-1">{t('cron.fieldExprHint')}<span className="font-mono">0 2 * * *</span></p>
+        </div>}
+        <div aria-live="polite" aria-busy={previewLoading}>
+          <div className="flex flex-wrap items-center gap-2 mb-2"><span className="text-sm font-medium">{t('cron.nextRuns')}</span><span className="text-xs text-slate-500">{jobForm.timezone}</span>{previewLoading && <Loader2 className="w-3 h-3 animate-spin text-slate-400" />}</div>
+          {previewError ? <p role="alert" className="text-xs text-rose-500">{previewError}</p> : <div className="rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700 px-3 py-2 space-y-1">{previewTimes.length ? previewTimes.map(raw => <div key={raw} className="text-xs font-mono text-slate-500 dark:text-slate-400">{scheduleTime(raw, jobForm.timezone.trim())}</div>) : <p className="text-xs text-slate-400">{previewLoading ? t('common.loading') : '—'}</p>}</div>}
+          {!jobForm.enabled && <p className="text-xs text-slate-500 mt-1">{t('remote.pausedPreview')}</p>}
+        </div>
+        {field(t('remote.timeout'), <input className="border rounded-lg px-3 py-2 bg-white dark:bg-slate-900 w-full" type="number" min="1" max="86400" required value={jobForm.timeout_sec} onChange={e => setJobForm({ ...jobForm, timeout_sec: Number(e.target.value) })} />)}
         <p className="text-xs text-slate-500">{t('remote.limits')}</p>
         <label className="flex gap-2 items-center text-sm"><input type="checkbox" checked={jobForm.enabled} onChange={e => setJobForm({ ...jobForm, enabled: e.target.checked })} />{t('remote.enableSchedule')}</label>
         {error && <p role="alert" className="text-sm text-rose-500">{error}</p>}
-        <div className="flex justify-end gap-2"><button type="button" className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50" disabled={busy} onClick={() => setJobForm(null)}>{t('common.cancel')}</button><button className="primary-button" disabled={busy}>{busy ? t('common.saving') : t('common.save')}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50" disabled={busy} onClick={() => setJobForm(null)}>{t('common.cancel')}</button><button className="primary-button" disabled={busy || previewLoading || !!previewError}>{busy ? t('common.saving') : t('common.save')}</button></div>
       </form>
     </Modal>}
     {detail && <Modal title={t('remote.runDetail')} size="xl" busy={busy} onClose={() => setDetailID(null)}>

@@ -941,6 +941,8 @@ export const en: Record<TranslationKey, string> = {
   'remote.noUpstreams': 'Add and enable at least one upstream first.',
   'remote.schedule': 'Cron schedule',
   'remote.timezone': 'Time zone',
+  'remote.invalidTimezone': 'Enter a valid task time zone',
+  'remote.pausedPreview': 'Schedule paused. These times are a preview; automatic runs start after enabling.',
   'remote.timeout': 'Timeout (seconds)',
   'remote.enableSchedule': 'Enable schedule',
   'remote.runDetail': 'Run details',
