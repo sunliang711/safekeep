@@ -61,9 +61,7 @@ export function Modal({ title, onClose, busy = false, dismissible = true, size =
   }, [])
 
   return createPortal(
-    <div className="modal-backdrop" onClick={(event) => {
-      if (event.target === event.currentTarget && dismissible && !busy) onClose()
-    }}>
+    <div className="modal-backdrop">
       <div ref={root} role="dialog" aria-modal="true" aria-label={title} aria-busy={busy} tabIndex={-1} className={`modal-container ${size === 'md' ? 'max-w-md' : size === 'xl' ? 'max-w-3xl' : 'max-w-2xl'}`}>
         {dismissible && <button type="button" onClick={onClose} disabled={busy} aria-label={t('common.closeModal')} className="modal-close"><X className="w-4 h-4" /></button>}
         {children}
