@@ -754,6 +754,11 @@ func scanCronJob(row rowScanner) (*CronJob, error) {
 
 func (s *Store) GetDashboardSummary(ctx context.Context) (*DashboardSummary, error) {
 	var d DashboardSummary
+	uploads, err := s.GetAPIUploadStats(ctx, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	d.APIUploads = uploads
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),

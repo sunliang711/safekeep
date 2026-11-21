@@ -177,4 +177,5 @@ type DashboardSummary struct {
 	DailyTraffic      *DailyTraffic  `json:"daily_traffic,omitempty"`
 	RecentTasks       []BackupTask   `json:"recent_tasks"`
 	Upstreams         []Upstream     `json:"upstreams"`
+	APIUploads        *UploadStats   `json:"api_uploads"`
 }

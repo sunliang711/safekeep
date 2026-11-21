@@ -181,6 +181,19 @@ export interface DailyTraffic {
   updated_at: string;
 }
 
+export interface UploadCount {
+  client_id: string;
+  client_name: string;
+  upload_count: number;
+}
+
+export interface UploadStats {
+  today: UploadCount[];
+  week: UploadCount[];
+  month: UploadCount[];
+  timezone: string;
+}
+
 export interface DashboardSummary {
   total_tasks: number;
   succeeded_tasks: number;
@@ -195,6 +208,7 @@ export interface DashboardSummary {
   daily_traffic?: DailyTraffic;
   recent_tasks: BackupTask[];
   upstreams: Upstream[];
+  api_uploads: UploadStats;
 }
 
 export interface InspectSummary {

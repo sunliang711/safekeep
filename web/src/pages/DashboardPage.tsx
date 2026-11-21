@@ -6,6 +6,7 @@ import { useToast } from '../components/Toast'
 import { useI18n } from '../contexts/I18nContext'
 import type { NavTab } from '../components/Layout'
 import { StatusBadge } from '../components/Badge'
+import { APIUploadsChart } from '../components/APIUploadsChart'
 import type { DashboardSummary } from '../types'
 
 export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({ onNavigate }) => {
@@ -206,6 +207,8 @@ export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({
           </div>
         </div>
       )}
+
+      <APIUploadsChart stats={data.api_uploads} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5">
