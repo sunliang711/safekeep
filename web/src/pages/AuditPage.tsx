@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Download, Search } from 'lucide-react'
 import { EmptyState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
+import { AuditDateTime, AuditSelect } from '../components/AuditFilters'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useI18n } from '../contexts/I18nContext'
@@ -367,8 +368,8 @@ export const AuditPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="filter-bar flex flex-wrap gap-3 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
-        <div className="flex items-center gap-2 flex-1 min-w-[200px] border rounded-lg px-3 py-1.5">
+      <div className="filter-bar audit-filter-bar flex flex-wrap gap-3 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+        <div className="audit-filter-search flex items-center gap-2 flex-1 min-w-[200px] border rounded-lg px-3 py-1.5">
           <Search className="w-4 h-4 text-slate-400" />
           <input
             value={q}
@@ -379,37 +380,30 @@ export const AuditPage: React.FC = () => {
             className="w-full text-sm focus:outline-none bg-transparent"
           />
         </div>
-        <select
-          aria-label={t('audit.actionAria')}
+        <AuditSelect
+          label={t('audit.actionAria')}
           value={action}
-          onChange={(e) => setAction(e.target.value)}
-          className="px-3 py-1.5 border rounded-lg text-sm bg-white dark:bg-slate-900"
-        >
-          <option value="">{t('audit.actionAll')}</option>
-          {ACTION_GROUPS.map((group) => (
-            <optgroup key={group.labelKey} label={t(group.labelKey)}>
-              {group.actions.map((act) => (
-                <option key={act} value={act}>
-                  {formatActionLabel(act)}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-        <select aria-label={t('audit.actorAria')} value={actorType} onChange={(e) => setActorType(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white dark:bg-slate-900">
-          <option value="">{t('audit.actorAll')}</option>
-          <option value="admin">{t('audit.actorAdmin')}</option>
-          <option value="client">{t('audit.actorClient')}</option>
-          <option value="system">{t('audit.actorSystem')}</option>
-        </select>
-        <select aria-label={t('audit.statusAria')} value={status} onChange={(e) => setStatus(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white dark:bg-slate-900">
-          <option value="">{t('audit.statusAll')}</option>
-          <option value="success">{t('status.success')}</option>
-          <option value="failure">{t('status.failure')}</option>
-        </select>
-        <input type="datetime-local" value={fromDate} onChange={(e) => setFromDate(e.target.value)} aria-label={t('audit.fromDateAria')} title={t('audit.fromDateAria')} className="px-2.5 py-1.5 border rounded-lg text-xs" />
-        <input type="datetime-local" value={toDate} onChange={(e) => setToDate(e.target.value)} aria-label={t('audit.toDateAria')} title={t('audit.toDateAria')} className="px-2.5 py-1.5 border rounded-lg text-xs" />
-        <button disabled={loading} onClick={() => { setOffset(0); load(0) }} className="px-4 py-1.5 bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-500 text-white rounded-lg text-sm">
+          onChange={setAction}
+          wide
+          options={[
+            { value: '', label: t('audit.actionAll') },
+            ...ACTION_GROUPS.flatMap((group) => group.actions.map((act) => ({ value: act, label: formatActionLabel(act), group: t(group.labelKey) }))),
+          ]}
+        />
+        <AuditSelect label={t('audit.actorAria')} value={actorType} onChange={setActorType} options={[
+          { value: '', label: t('audit.actorAll') },
+          { value: 'admin', label: t('audit.actorAdmin') },
+          { value: 'client', label: t('audit.actorClient') },
+          { value: 'system', label: t('audit.actorSystem') },
+        ]} />
+        <AuditSelect label={t('audit.statusAria')} value={status} onChange={setStatus} options={[
+          { value: '', label: t('audit.statusAll') },
+          { value: 'success', label: t('status.success') },
+          { value: 'failure', label: t('status.failure') },
+        ]} />
+        <AuditDateTime label={t('audit.fromDateAria')} value={fromDate} onChange={setFromDate} />
+        <AuditDateTime label={t('audit.toDateAria')} value={toDate} onChange={setToDate} />
+        <button disabled={loading} onClick={() => { setOffset(0); load(0) }} className="audit-filter-submit px-4 py-1.5 bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-500 text-white rounded-lg text-sm">
           {loading ? t('common.searching') : t('common.search')}
         </button>
         {(q || action || actorType || status || fromDate || toDate) && (
