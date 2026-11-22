@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Check, CheckCircle2, Copy, Eye, EyeOff, Loader2, Mail, SlidersHorizontal, Users, XCircle } from 'lucide-react'
 import { Modal } from '../components/Modal'
+import { useConfirm, type BeforeNavigateDetail } from '../components/ConfirmDialog'
 import { LoadingState } from '../components/Feedback'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
@@ -54,6 +55,7 @@ function smtpSnapshot(cfg: {
 }
 
 export const SettingsPage: React.FC = () => {
+  const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
   const [subTab, setSubTab] = useState<SettingsSubTab>('general')
@@ -233,7 +235,8 @@ export const SettingsPage: React.FC = () => {
       event.returnValue = ''
     }
     const beforeNavigate = (event: Event) => {
-      if (!confirm(t('settings.leaveConfirm'))) event.preventDefault()
+      const navigation = event as CustomEvent<BeforeNavigateDetail>
+      navigation.detail.waitUntil(askConfirm(t('settings.leaveConfirm'), { title: t('common.unsavedTitle'), confirmText: t('common.discardChanges') }))
     }
     window.addEventListener('beforeunload', beforeUnload)
     window.addEventListener('safekeep:before-navigate', beforeNavigate)
@@ -241,7 +244,7 @@ export const SettingsPage: React.FC = () => {
       window.removeEventListener('beforeunload', beforeUnload)
       window.removeEventListener('safekeep:before-navigate', beforeNavigate)
     }
-  }, [generalDirty, smtpDirty, t])
+  }, [generalDirty, smtpDirty, t, askConfirm])
 
   const saveSMTP = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -910,7 +913,7 @@ export const SettingsPage: React.FC = () => {
                             </button>
                             <button
                               onClick={async () => {
-                                if (a.is_active && !confirm(t('settings.disableAdminConfirm', { name: a.username }))) return
+                                if (a.is_active && !await askConfirm(t('settings.disableAdminConfirm', { name: a.username }), { confirmText: t('common.disable'), danger: true })) return
                                 try {
                                   await api.updateAdmin(a.id, { is_active: !a.is_active })
                                   toast.success(t('settings.toggledAdminToast', { action: a.is_active ? t('common.disable') : t('common.enable'), name: a.username }))

@@ -3,6 +3,7 @@ import { api } from './api'
 import { Layout, type NavTab } from './components/Layout'
 import { LoadingState } from './components/Feedback'
 import { ToastProvider } from './components/Toast'
+import { allowNavigation } from './components/ConfirmDialog'
 import { useI18n } from './contexts/I18nContext'
 import { AuditPage } from './pages/AuditPage'
 import { AuthPage } from './pages/AuthPages'
@@ -64,9 +65,9 @@ export function App() {
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
-  const navigate = (next: NavTab) => {
+  const navigate = async (next: NavTab) => {
     if (next === tab) return
-    if (!window.dispatchEvent(new Event('safekeep:before-navigate', { cancelable: true }))) return
+    if (!await allowNavigation()) return
     setTab(next)
     const path = next === 'dashboard' ? '/' : `/${next}`
     window.history.pushState({}, '', path)
@@ -119,7 +120,7 @@ export function App() {
         admin={admin}
         version={version}
         onLogout={async () => {
-          if (!window.dispatchEvent(new Event('safekeep:before-navigate', { cancelable: true }))) return
+          if (!await allowNavigation()) return
           await api.logout()
           setAdmin(null)
         }}

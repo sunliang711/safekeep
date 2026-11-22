@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowRight, CheckCircle2, Cloud, FileArchive, HardDrive,
 import { api, formatBytes, formatTime } from '../api'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { useToast } from '../components/Toast'
+import { useConfirm } from '../components/ConfirmDialog'
 import { useI18n } from '../contexts/I18nContext'
 import type { NavTab } from '../components/Layout'
 import { StatusBadge } from '../components/Badge'
@@ -10,6 +11,7 @@ import { APIUploadsChart } from '../components/APIUploadsChart'
 import type { DashboardSummary } from '../types'
 
 export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({ onNavigate }) => {
+  const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
   const [resetting, setResetting] = useState(false)
@@ -162,7 +164,7 @@ export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({
           </div>
           <button
             onClick={async () => {
-              if (!confirm(t('dashboard.traffic.confirmReset'))) return
+              if (!await askConfirm(t('dashboard.traffic.confirmReset'), { danger: true })) return
               setResetting(true)
               try {
                 await api.resetCircuitBreaker()

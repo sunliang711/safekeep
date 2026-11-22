@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { useI18n } from '../contexts/I18nContext'
+import { isTopDialog, registerDialog } from './dialogLayers'
 
 interface DrawerProps {
   title: string
@@ -38,9 +39,7 @@ export function Drawer({
   blocked.current = busy
 
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null
-    const overflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const unregister = registerDialog(root.current!)
     const focusable = () =>
       Array.from(
         root.current?.querySelectorAll<HTMLElement>(
@@ -51,6 +50,7 @@ export function Drawer({
     ;(focusable()[0] || root.current)?.focus()
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!isTopDialog(root.current)) return
       if (event.key === 'Escape' && !blocked.current) {
         event.preventDefault()
         event.stopPropagation()
@@ -74,9 +74,8 @@ export function Drawer({
     }
     document.addEventListener('keydown', onKeyDown, true)
     return () => {
-      document.body.style.overflow = overflow
       document.removeEventListener('keydown', onKeyDown, true)
-      previous?.focus()
+      unregister()
     }
   }, [])
 

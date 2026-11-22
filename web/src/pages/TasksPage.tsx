@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Download, RotateCcw, Search, Upload, XCircle } from 'lucide-react'
 import { EmptyState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
+import { AuditSelect } from '../components/AuditFilters'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useI18n } from '../contexts/I18nContext'
@@ -251,8 +252,8 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
         </button>
       </div>
 
-      <div className="filter-bar flex flex-wrap gap-3 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
-        <div className="flex items-center gap-2 flex-1 min-w-[200px] border rounded-lg px-3 py-1.5">
+      <div className="filter-bar audit-filter-bar flex flex-wrap gap-3 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+        <div className="audit-filter-search flex items-center gap-2 flex-1 min-w-[200px] border rounded-lg px-3 py-1.5">
           <Search className="w-4 h-4 text-slate-400" />
           <input
             value={q}
@@ -268,26 +269,26 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
             className="w-full text-sm focus:outline-none bg-transparent"
           />
         </div>
-        <select aria-label={t('tasks.filterStatusAria')} value={status} onChange={(e) => setStatus(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white dark:bg-slate-900">
-          <option value="">{t('tasks.filterStatusAll')}</option>
-          <option value="succeeded">{t('tasks.filterStatusSucceeded')}</option>
-          <option value="pending">{t('tasks.filterStatusPending')}</option>
-          <option value="running">{t('tasks.filterStatusRunning')}</option>
-          <option value="partial_success">{t('tasks.filterStatusPartial')}</option>
-          <option value="failed">{t('tasks.filterStatusFailed')}</option>
-        </select>
-        <select aria-label={t('tasks.filterModeAria')} value={mode} onChange={(e) => setMode(e.target.value)} className="px-3 py-1.5 border rounded-lg text-sm bg-white dark:bg-slate-900">
-          <option value="">{t('tasks.filterModeAll')}</option>
-          <option value="sync">{t('status.sync')}</option>
-          <option value="async">{t('status.async')}</option>
-        </select>
+        <AuditSelect label={t('tasks.filterStatusAria')} value={status} onChange={setStatus} options={[
+          { value: '', label: t('tasks.filterStatusAll') },
+          { value: 'succeeded', label: t('tasks.filterStatusSucceeded') },
+          { value: 'pending', label: t('tasks.filterStatusPending') },
+          { value: 'running', label: t('tasks.filterStatusRunning') },
+          { value: 'partial_success', label: t('tasks.filterStatusPartial') },
+          { value: 'failed', label: t('tasks.filterStatusFailed') },
+        ]} />
+        <AuditSelect label={t('tasks.filterModeAria')} value={mode} onChange={setMode} options={[
+          { value: '', label: t('tasks.filterModeAll') },
+          { value: 'sync', label: t('status.sync') },
+          { value: 'async', label: t('status.async') },
+        ]} />
         <button
           onClick={() => {
             setOffset(0)
             load(0)
           }}
           disabled={loading}
-          className="px-4 py-1.5 bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-500 text-white rounded-lg text-sm"
+          className="audit-filter-submit px-4 py-1.5 bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-500 text-white rounded-lg text-sm"
         >
           {loading ? t('common.searching') : t('common.search')}
         </button>

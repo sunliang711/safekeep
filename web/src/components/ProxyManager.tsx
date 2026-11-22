@@ -5,6 +5,7 @@ import type { NetworkProxy } from '../types'
 import { useI18n } from '../contexts/I18nContext'
 import { useToast } from './Toast'
 import { Modal } from './Modal'
+import { useConfirm } from './ConfirmDialog'
 import { SecretField } from './SecretField'
 
 interface ProxyForm {
@@ -20,6 +21,7 @@ interface ProxyForm {
 }
 
 export function ProxyManager({ proxies, onChanged }: { proxies: NetworkProxy[]; onChanged: () => Promise<void> }) {
+  const askConfirm = useConfirm()
   const { t } = useI18n()
   const toast = useToast()
   const [form, setForm] = useState<ProxyForm | null>(null)
@@ -42,8 +44,8 @@ export function ProxyManager({ proxies, onChanged }: { proxies: NetworkProxy[]; 
     setTargetURL('')
     setTestResult(null)
   }
-  const close = () => {
-    if (JSON.stringify(form) !== initial && !confirm(t('upstreams.discardConfirm'))) return
+  const close = async () => {
+    if (JSON.stringify(form) !== initial && !await askConfirm(t('upstreams.discardConfirm'), { title: t('common.unsavedTitle'), confirmText: t('common.discardChanges') })) return
     setForm(null)
   }
   const save = async (e: React.FormEvent) => {
@@ -68,7 +70,7 @@ export function ProxyManager({ proxies, onChanged }: { proxies: NetworkProxy[]; 
     }
   }
   const remove = async (p: NetworkProxy) => {
-    if (!confirm(t('proxies.deleteConfirm', { name: p.name }))) return
+    if (!await askConfirm(t('proxies.deleteConfirm', { name: p.name }), { title: t('common.deleteConfirmTitle'), confirmText: t('common.delete'), danger: true })) return
     try {
       await api.deleteProxy(p.id)
       toast.success(t('proxies.deleted'))

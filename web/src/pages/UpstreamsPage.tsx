@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { CheckCircle2, Copy, Link2, Loader2, Plus, Trash2, Upload, Wifi, XCircle } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
+import { useConfirm } from '../components/ConfirmDialog'
 import { ProxyManager } from '../components/ProxyManager'
 import { SecretField } from '../components/SecretField'
 import { api } from '../api'
@@ -61,6 +62,7 @@ const emptyForm = (): FormState => ({
 })
 
 export const UpstreamsPage: React.FC = () => {
+  const askConfirm = useConfirm()
   const toast = useToast()
   const { t } = useI18n()
   const [items, setItems] = useState<Upstream[]>([])
@@ -199,8 +201,8 @@ export const UpstreamsPage: React.FC = () => {
     }
   }
 
-  const closeModal = () => {
-    if (JSON.stringify(form) !== initialFormSnap && !confirm(t('upstreams.discardConfirm'))) return
+  const closeModal = async () => {
+    if (JSON.stringify(form) !== initialFormSnap && !await askConfirm(t('upstreams.discardConfirm'), { title: t('common.unsavedTitle'), confirmText: t('common.discardChanges') })) return
     setModalOpen(false)
   }
 
@@ -303,7 +305,7 @@ export const UpstreamsPage: React.FC = () => {
   }
 
   const handleDelete = async (u: Upstream) => {
-    if (!confirm(t('upstreams.deleteConfirm', { name: u.name }))) return
+    if (!await askConfirm(t('upstreams.deleteConfirm', { name: u.name }), { title: t('common.deleteConfirmTitle'), confirmText: t('common.delete'), danger: true })) return
     try {
       await api.deleteUpstream(u.id)
       toast.success(t('upstreams.deletedToast', { name: u.name }))

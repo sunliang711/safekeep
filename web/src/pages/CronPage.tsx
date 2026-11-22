@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus, RefreshCw, X } from 'lucide-react'
 import { LoadingState } from '../components/Feedback'
 import { Drawer } from '../components/Drawer'
+import { useConfirm } from '../components/ConfirmDialog'
 import { SecretField } from '../components/SecretField'
 import { api, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
@@ -220,6 +221,7 @@ const Switch: React.FC<{
 )
 
 export const CronPage: React.FC = () => {
+  const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
   const [loading, setLoading] = useState(true)
@@ -339,9 +341,9 @@ export const CronPage: React.FC = () => {
   )
   const isDirty = Boolean(editing && currentSnap !== initialSnap)
 
-  const closeEdit = () => {
+  const closeEdit = async () => {
     if (saving) return
-    if (isDirty && !confirm(t('cron.discardConfirm'))) return
+    if (isDirty && !await askConfirm(t('cron.discardConfirm'), { title: t('common.unsavedTitle'), confirmText: t('common.discardChanges') })) return
     setEditing(null)
     setParams(null)
     setFormError('')

@@ -2,10 +2,12 @@ import React, { useState } from 'react'
 import { Download, ShieldAlert, Upload } from 'lucide-react'
 import { api, formatTime } from '../api'
 import { useToast } from '../components/Toast'
+import { useConfirm } from '../components/ConfirmDialog'
 import { useI18n } from '../contexts/I18nContext'
 import type { InspectSummary } from '../types'
 
 export const MigrationPage: React.FC = () => {
+  const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
 
@@ -70,7 +72,7 @@ export const MigrationPage: React.FC = () => {
 
   const handleImport = async () => {
     if (!impFile || !inspectRes || importing) return
-    if (impMode === 'replace' && !confirm(t('migration.replaceConfirm'))) {
+    if (impMode === 'replace' && !await askConfirm(t('migration.replaceConfirm'), { danger: true })) {
       return
     }
     setImporting(true)

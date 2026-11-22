@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { useI18n } from '../contexts/I18nContext'
+import { isTopDialog, registerDialog } from './dialogLayers'
 
 interface Props {
   title: string
@@ -10,9 +11,11 @@ interface Props {
   dismissible?: boolean
   size?: 'md' | 'lg' | 'xl'
   children: React.ReactNode
+  role?: 'dialog' | 'alertdialog'
+  descriptionId?: string
 }
 
-export function Modal({ title, onClose, busy = false, dismissible = true, size = 'lg', children }: Props) {
+export function Modal({ title, onClose, busy = false, dismissible = true, size = 'lg', children, role = 'dialog', descriptionId }: Props) {
   const { t } = useI18n()
   const root = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
@@ -21,15 +24,14 @@ export function Modal({ title, onClose, busy = false, dismissible = true, size =
   blocked.current = busy || !dismissible
 
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null
-    const overflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const unregister = registerDialog(root.current!)
     const focusable = () => Array.from(root.current?.querySelectorAll<HTMLElement>(
       'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]'
     ) || []).filter((el) => el.getClientRects().length > 0)
-    const first = root.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)')
+    const first = root.current?.querySelector<HTMLElement>('[data-autofocus], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)')
     ;(first || focusable()[0] || root.current)?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!isTopDialog(root.current)) return
       if (event.key === 'Escape' && !blocked.current) {
         event.preventDefault()
         event.stopPropagation()
@@ -54,15 +56,14 @@ export function Modal({ title, onClose, busy = false, dismissible = true, size =
     }
     document.addEventListener('keydown', onKeyDown, true)
     return () => {
-      document.body.style.overflow = overflow
       document.removeEventListener('keydown', onKeyDown, true)
-      previous?.focus()
+      unregister()
     }
   }, [])
 
   return createPortal(
     <div className="modal-backdrop">
-      <div ref={root} role="dialog" aria-modal="true" aria-label={title} aria-busy={busy} tabIndex={-1} className={`modal-container ${size === 'md' ? 'max-w-md' : size === 'xl' ? 'max-w-3xl' : 'max-w-2xl'}`}>
+      <div ref={root} role={role} aria-modal="true" aria-label={title} aria-describedby={descriptionId} aria-busy={busy} tabIndex={-1} className={`modal-container ${size === 'md' ? 'max-w-md' : size === 'xl' ? 'max-w-3xl' : 'max-w-2xl'}`}>
         {dismissible && <button type="button" onClick={onClose} disabled={busy} aria-label={t('common.closeModal')} className="modal-close"><X className="w-4 h-4" /></button>}
         {children}
       </div>

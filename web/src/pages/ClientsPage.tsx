@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, Eye, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
+import { useConfirm } from '../components/ConfirmDialog'
 import { SecretField } from '../components/SecretField'
 import { api, formatBytes, formatTime } from '../api'
 import { StatusBadge } from '../components/Badge'
@@ -27,6 +28,7 @@ interface ClientForm {
 }
 
 export const ClientsPage: React.FC = () => {
+  const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
   const [clients, setClients] = useState<Client[]>([])
@@ -123,8 +125,8 @@ export const ClientsPage: React.FC = () => {
     setModalOpen(true)
   }
 
-  const closeModal = () => {
-    if (JSON.stringify(form) !== initialFormSnap && !confirm(t('clients.discardConfirm'))) return
+  const closeModal = async () => {
+    if (JSON.stringify(form) !== initialFormSnap && !await askConfirm(t('clients.discardConfirm'), { title: t('common.unsavedTitle'), confirmText: t('common.discardChanges') })) return
     setModalOpen(false)
   }
 
@@ -201,7 +203,7 @@ export const ClientsPage: React.FC = () => {
   }
 
   const handleRotate = async (c: Client) => {
-    if (!confirm(t('clients.rotateConfirm', { name: c.name }))) return
+    if (!await askConfirm(t('clients.rotateConfirm', { name: c.name }), { danger: true })) return
     try {
       const res = await api.rotateClientKey(c.id)
       setRevealedKey({ key: res.api_key, clientName: c.name, isNew: true })
@@ -213,7 +215,7 @@ export const ClientsPage: React.FC = () => {
   }
 
   const handleDelete = async (c: Client) => {
-    if (!confirm(t('clients.deleteConfirm', { name: c.name }))) return
+    if (!await askConfirm(t('clients.deleteConfirm', { name: c.name }), { title: t('common.deleteConfirmTitle'), confirmText: t('common.delete'), danger: true })) return
     try {
       await api.deleteClient(c.id)
       toast.success(t('clients.deletedToast', { name: c.name }))
