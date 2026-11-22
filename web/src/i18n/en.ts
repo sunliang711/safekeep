@@ -537,7 +537,7 @@ export const en: Record<TranslationKey, string> = {
   'cron.job.upstream_health_check.desc': 'Periodically probes all enabled upstreams (including HTTP/SOCKS5 proxies) and updates health status.',
   'cron.job.dropbox_token_refresh.name': 'Dropbox OAuth2 Token Refresh',
   'cron.job.dropbox_token_refresh.desc': 'Proactively refreshes expiring Dropbox access tokens to keep refresh tokens valid.',
-  'cron.job.migration_backup.name': 'Automated Migration Bundle Backup',
+  'cron.job.migration_backup.name': 'Automated Migration Bundle Backup to Safekeep',
   'cron.job.migration_backup.desc': 'Periodically exports a .skbundle migration archive and uploads it to remote upstreams via SafeKeep HTTP API (local or external instance).',
   'cron.errEmptyExpr': 'Please enter a cron expression',
   'cron.errInvalidExpr': 'Invalid cron expression',

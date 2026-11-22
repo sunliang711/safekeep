@@ -535,7 +535,7 @@ export const zh = {
   'cron.job.upstream_health_check.desc': '定期测试所有已启用上游（含 HTTP/SOCKS5 代理）的连通性并刷新状态。',
   'cron.job.dropbox_token_refresh.name': 'Dropbox OAuth2 Token 预刷新',
   'cron.job.dropbox_token_refresh.desc': '提前刷新即将过期的 Dropbox Access Token，确认 Refresh Token 持续有效。',
-  'cron.job.migration_backup.name': '环境迁移包自动备份',
+  'cron.job.migration_backup.name': '环境迁移包自动备份至Safekeep',
   'cron.job.migration_backup.desc': '定期导出环境迁移包（.skbundle），并通过 SafeKeep HTTP API 备份到远端上游（支持本机或外部 SafeKeep）。',
   'cron.errEmptyExpr': '请输入 cron 表达式',
   'cron.errInvalidExpr': 'cron 表达式无效',
