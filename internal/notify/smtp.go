@@ -20,22 +20,26 @@ import (
 // Timeout caps a single SMTP delivery attempt.
 const Timeout = 20 * time.Second
 
-// SMTPConfig defines outbound email alerting configuration.
+// SMTPConfig defines outbound email notification configuration.
 type SMTPConfig struct {
-	Enabled           bool     `json:"enabled" toml:"enabled"`
-	Host              string   `json:"host" toml:"host"`
-	Port              int      `json:"port" toml:"port"`
-	TLSMode           string   `json:"tls_mode" toml:"tls_mode"` // starttls | tls | none
-	Username          string   `json:"username" toml:"username"`
-	Password          string   `json:"password,omitempty" toml:"password"`
-	PasswordEncrypted string   `json:"password_encrypted,omitempty" toml:"-"`
-	FromEmail         string   `json:"from_email" toml:"from_email"`
-	FromName          string   `json:"from_name" toml:"from_name"`
-	ToEmails          []string `json:"to_emails" toml:"to_emails"`
+	Enabled           bool        `json:"enabled" toml:"enabled"`
+	Host              string      `json:"host" toml:"host"`
+	Port              int         `json:"port" toml:"port"`
+	TLSMode           string      `json:"tls_mode" toml:"tls_mode"` // starttls | tls | none
+	Username          string      `json:"username" toml:"username"`
+	Password          string      `json:"password,omitempty" toml:"password"`
+	PasswordEncrypted string      `json:"password_encrypted,omitempty" toml:"-"`
+	FromEmail         string      `json:"from_email" toml:"from_email"`
+	FromName          string      `json:"from_name" toml:"from_name"`
+	ToEmails          []string    `json:"to_emails" toml:"to_emails"`
+	Notifications     NotifyRules `json:"notifications" toml:"notifications"`
 }
 
-// Validate verifies required SMTP fields when enabled.
+// Validate verifies required SMTP fields when enabled and checks notification rule values.
 func (c SMTPConfig) Validate() error {
+	if err := c.Notifications.Validate(); err != nil {
+		return err
+	}
 	if !c.Enabled {
 		return nil
 	}

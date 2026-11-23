@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Check, CheckCircle2, Copy, Eye, EyeOff, Loader2, Mail, SlidersHorizontal, Users, XCircle } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Loader2, Mail, Server, SlidersHorizontal, Users, XCircle } from 'lucide-react'
 import { Modal } from '../components/Modal'
 import { useConfirm, type BeforeNavigateDetail } from '../components/ConfirmDialog'
 import { LoadingState } from '../components/Feedback'
@@ -8,7 +8,7 @@ import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
 import { useI18n } from '../contexts/I18nContext'
 import { copyText } from '../utils/clipboard'
-import type { Admin, SMTPConfig, SystemSettings } from '../types'
+import type { Admin, NotifyMode, NotifyRules, SMTPConfig, SystemSettings } from '../types'
 
 type SettingsSubTab = 'general' | 'smtp' | 'admins'
 type SizeUnit = 'KB' | 'MB' | 'GB'
@@ -32,6 +32,29 @@ interface SizeFieldState {
   unit: SizeUnit
 }
 
+const DEFAULT_NOTIFY_RULES: NotifyRules = {
+  circuit_breaker_tripped: true,
+  oversize_rejected: true,
+  backup_upload: 'failure',
+  remote_backup: 'failure',
+  migration_backup: 'failure',
+  migration_export: false,
+  migration_import: false,
+  upstream_health_check: true,
+  client_delete: false,
+  client_key_rotate: false,
+  resource_delete: false,
+  secrets_reveal: false,
+  admin_security: false,
+}
+
+function normalizeNotifyRules(rules?: Partial<NotifyRules>): NotifyRules {
+  return {
+    ...DEFAULT_NOTIFY_RULES,
+    ...(rules || {}),
+  }
+}
+
 function smtpSnapshot(cfg: {
   enabled: boolean
   host: string
@@ -41,6 +64,7 @@ function smtpSnapshot(cfg: {
   from_email: string
   from_name: string
   to_emails: string[]
+  notifications: NotifyRules
 }): string {
   return JSON.stringify({
     enabled: cfg.enabled,
@@ -51,6 +75,7 @@ function smtpSnapshot(cfg: {
     from_email: cfg.from_email.trim(),
     from_name: cfg.from_name.trim(),
     to_emails: cfg.to_emails,
+    notifications: normalizeNotifyRules(cfg.notifications),
   })
 }
 
@@ -84,6 +109,8 @@ export const SettingsPage: React.FC = () => {
   const [smtpFromEmail, setSmtpFromEmail] = useState('')
   const [smtpFromName, setSmtpFromName] = useState('SafeKeep')
   const [smtpToEmails, setSmtpToEmails] = useState('')
+  const [notifyRules, setNotifyRules] = useState<NotifyRules>(DEFAULT_NOTIFY_RULES)
+  const [smtpServerOpen, setSmtpServerOpen] = useState(false)
   const [savedSmtpSnap, setSavedSmtpSnap] = useState('')
   const [savingSmtp, setSavingSmtp] = useState(false)
   const [smtpTesting, setSmtpTesting] = useState(false)
@@ -116,6 +143,8 @@ export const SettingsPage: React.FC = () => {
     setSmtpFromEmail(smtp.from_email || '')
     setSmtpFromName(smtp.from_name || 'SafeKeep')
     setSmtpToEmails((smtp.to_emails || []).join(', '))
+    const normalizedRules = normalizeNotifyRules(smtp.notifications)
+    setNotifyRules(normalizedRules)
     setSavedSmtpSnap(
       smtpSnapshot({
         enabled: smtp.enabled,
@@ -126,6 +155,7 @@ export const SettingsPage: React.FC = () => {
         from_email: smtp.from_email || '',
         from_name: smtp.from_name || 'SafeKeep',
         to_emails: smtp.to_emails || [],
+        notifications: normalizedRules,
       })
     )
   }
@@ -210,6 +240,7 @@ export const SettingsPage: React.FC = () => {
     from_email: smtpFromEmail.trim(),
     from_name: smtpFromName.trim(),
     to_emails: parseToEmails(smtpToEmails),
+    notifications: notifyRules,
   })
 
   const currentSmtpSnap = smtpSnapshot({
@@ -221,6 +252,7 @@ export const SettingsPage: React.FC = () => {
     from_email: smtpFromEmail,
     from_name: smtpFromName,
     to_emails: parseToEmails(smtpToEmails),
+    notifications: notifyRules,
   })
   const generalDirty = settings ? JSON.stringify(settings) !== savedGeneralSnap : false
   const smtpDirty =
@@ -648,7 +680,38 @@ export const SettingsPage: React.FC = () => {
                       <input type="checkbox" checked={smtpEnabled} onChange={(e) => setSmtpEnabled(e.target.checked)} />
                       <span className="font-medium">{t('settings.smtpEnable')}</span>
                     </label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+                      <button
+                        type="button"
+                        aria-expanded={smtpServerOpen}
+                        onClick={() => setSmtpServerOpen((prev) => !prev)}
+                        className="w-full px-4 py-3 bg-slate-50/80 dark:bg-slate-800/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/80 flex items-center justify-between gap-3 text-left transition-colors"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Server className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="font-medium text-slate-800 dark:text-slate-100">{t('settings.smtpServerSectionTitle')}</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                              {smtpHost.trim()
+                                ? t('settings.smtpServerSummaryConfigured', {
+                                    host: smtpHost.trim(),
+                                    port: smtpPort,
+                                    tls: smtpTLSMode.toUpperCase(),
+                                    count: parseToEmails(smtpToEmails).length,
+                                  })
+                                : t('settings.smtpServerSummaryEmpty')}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 shrink-0">
+                          <span>{smtpServerOpen ? t('settings.smtpServerCollapse') : t('settings.smtpServerExpand')}</span>
+                          {smtpServerOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                        </span>
+                      </button>
+                      {smtpServerOpen && (
+                        <div className="p-4 border-t border-slate-200 dark:border-slate-800">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label htmlFor="settings-field-9" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpHost')}</label>
                         <input
@@ -831,14 +894,190 @@ export const SettingsPage: React.FC = () => {
                       </div>
                       <div>
                         <label htmlFor="settings-field-14" className="block text-xs text-slate-600 dark:text-slate-300 mb-1">{t('settings.smtpToEmails')}</label>
-                        <input
-                          id="settings-field-14"
-                          value={smtpToEmails}
-                          onChange={(e) => setSmtpToEmails(e.target.value)}
-                          placeholder="ops@example.com, admin@example.com"
-                          className="w-full px-3 py-1.5 border rounded-lg"
-                        />
+                          <input
+                            id="settings-field-14"
+                            value={smtpToEmails}
+                            onChange={(e) => setSmtpToEmails(e.target.value)}
+                            placeholder="ops@example.com, admin@example.com"
+                            className="w-full px-3 py-1.5 border rounded-lg"
+                          />
+                        </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-3 pt-1">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('settings.notifyRulesTitle')}</h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t('settings.notifyRulesDesc')}</p>
+                        {!smtpEnabled && (
+                          <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">{t('settings.notifyDisabledHint')}</p>
+                        )}
                       </div>
+
+                      {(
+                        [
+                          {
+                            title: t('settings.notifyGroupBackups'),
+                            items: [
+                              {
+                                kind: 'mode' as const,
+                                key: 'backup_upload' as const,
+                                label: t('settings.notifyBackupUpload'),
+                                desc: t('settings.notifyBackupUploadDesc'),
+                              },
+                              {
+                                kind: 'mode' as const,
+                                key: 'remote_backup' as const,
+                                label: t('settings.notifyRemoteBackup'),
+                                desc: t('settings.notifyRemoteBackupDesc'),
+                              },
+                            ],
+                          },
+                          {
+                            title: t('settings.notifyGroupOps'),
+                            items: [
+                              {
+                                kind: 'mode' as const,
+                                key: 'migration_backup' as const,
+                                label: t('settings.notifyMigrationBackup'),
+                                desc: t('settings.notifyMigrationBackupDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'upstream_health_check' as const,
+                                label: t('settings.notifyUpstreamHealth'),
+                                desc: t('settings.notifyUpstreamHealthDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'migration_export' as const,
+                                label: t('settings.notifyMigrationExport'),
+                                desc: t('settings.notifyMigrationExportDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'migration_import' as const,
+                                label: t('settings.notifyMigrationImport'),
+                                desc: t('settings.notifyMigrationImportDesc'),
+                              },
+                            ],
+                          },
+                          {
+                            title: t('settings.notifyGroupAlerts'),
+                            items: [
+                              {
+                                kind: 'bool' as const,
+                                key: 'circuit_breaker_tripped' as const,
+                                label: t('settings.notifyCircuitBreaker'),
+                                desc: t('settings.notifyCircuitBreakerDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'oversize_rejected' as const,
+                                label: t('settings.notifyOversize'),
+                                desc: t('settings.notifyOversizeDesc'),
+                              },
+                            ],
+                          },
+                          {
+                            title: t('settings.notifyGroupSecurity'),
+                            items: [
+                              {
+                                kind: 'bool' as const,
+                                key: 'client_delete' as const,
+                                label: t('settings.notifyClientDelete'),
+                                desc: t('settings.notifyClientDeleteDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'client_key_rotate' as const,
+                                label: t('settings.notifyClientKeyRotate'),
+                                desc: t('settings.notifyClientKeyRotateDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'resource_delete' as const,
+                                label: t('settings.notifyResourceDelete'),
+                                desc: t('settings.notifyResourceDeleteDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'secrets_reveal' as const,
+                                label: t('settings.notifySecretsReveal'),
+                                desc: t('settings.notifySecretsRevealDesc'),
+                              },
+                              {
+                                kind: 'bool' as const,
+                                key: 'admin_security' as const,
+                                label: t('settings.notifyAdminSecurity'),
+                                desc: t('settings.notifyAdminSecurityDesc'),
+                              },
+                            ],
+                          },
+                        ] as const
+                      ).map((group) => (
+                        <div key={group.title} className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+                          <div className="px-4 py-2 bg-slate-50/80 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                            {group.title}
+                          </div>
+                          <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                            {group.items.map((item) => (
+                              <div key={item.key} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+                                <div className="min-w-0">
+                                  <div className="font-medium text-slate-800 dark:text-slate-100 text-sm">{item.label}</div>
+                                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{item.desc}</div>
+                                </div>
+                                {item.kind === 'mode' ? (
+                                  <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800 shrink-0 self-start sm:self-center">
+                                    {(
+                                      [
+                                        { value: 'off' as NotifyMode, label: t('settings.notifyModeOff') },
+                                        { value: 'failure' as NotifyMode, label: t('settings.notifyModeFailure') },
+                                        { value: 'always' as NotifyMode, label: t('settings.notifyModeAlways') },
+                                      ]
+                                    ).map((opt) => {
+                                      const active = notifyRules[item.key] === opt.value
+                                      return (
+                                        <button
+                                          key={opt.value}
+                                          type="button"
+                                          onClick={() => setNotifyRules((prev) => ({ ...prev, [item.key]: opt.value }))}
+                                          className={`px-2.5 py-1 text-xs font-medium transition border-r last:border-r-0 border-slate-300 dark:border-slate-700 ${
+                                            active
+                                              ? 'bg-indigo-600 text-white'
+                                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                                          }`}
+                                        >
+                                          {opt.label}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={notifyRules[item.key]}
+                                    aria-label={item.label}
+                                    onClick={() => setNotifyRules((prev) => ({ ...prev, [item.key]: !prev[item.key] }))}
+                                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/40 self-start sm:self-center ${
+                                      notifyRules[item.key] ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition ${
+                                        notifyRules[item.key] ? 'translate-x-4' : 'translate-x-0'
+                                      }`}
+                                    />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                     </div>
 
                     {smtpTesting && (

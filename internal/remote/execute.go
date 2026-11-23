@@ -12,6 +12,7 @@ import (
 
 	"safekeep/internal/audit"
 	"safekeep/internal/db"
+	"safekeep/internal/notify"
 )
 
 func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
@@ -80,6 +81,7 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 			}
 			s.audit.Record(context.WithoutCancel(s.ctx), audit.Event{ActorType: "system", ActorID: "remote-backup", ActorName: "remote-backup", Action: "remote_backup.execute", ResourceType: "remote_backup_run", ResourceID: r.ID, Status: status, Detail: map[string]any{"job_id": j.ID, "status": r.Status, "trigger": r.Trigger}})
 		}
+		s.notifyRemoteRun(j, r, succeeded, failed)
 	}()
 	select {
 	case s.slots <- struct{}{}:
@@ -146,6 +148,64 @@ func (s *Service) execute(j *db.RemoteJob, r *db.RemoteRun, retry bool) {
 		}
 		s.persist(r)
 	}
+}
+
+func (s *Service) notifyRemoteRun(j *db.RemoteJob, r *db.RemoteRun, succeededUploads, failedUploads int) {
+	if j == nil || r == nil {
+		return
+	}
+	succeeded := r.Status == "succeeded"
+	statusLabel := "成功"
+	switch r.Status {
+	case "partial_success":
+		statusLabel = "部分成功"
+	case "failed":
+		statusLabel = "失败"
+	}
+	triggerLabel := "定时调度"
+	switch r.Trigger {
+	case "manual":
+		triggerLabel = "手动触发"
+	case "retry":
+		triggerLabel = "失败重试"
+	}
+	var dirLines []string
+	for _, a := range r.Archives {
+		line := fmt.Sprintf("  - %s: %s", a.SourcePath, a.Status)
+		if a.Error != "" {
+			line += " — " + a.Error
+		}
+		dirLines = append(dirLines, line)
+	}
+	subject := fmt.Sprintf("[SafeKeep] 远程备份%s (%s)", statusLabel, j.Name)
+	body := fmt.Sprintf(
+		"SafeKeep 远程备份执行已结束：\n\n"+
+			"- 任务名称: %s (%s)\n"+
+			"- 执行 ID: %s\n"+
+			"- 触发方式: %s\n"+
+			"- 执行结果: %s (成功上传 %d / 失败 %d)\n",
+		j.Name, j.ID,
+		r.ID,
+		triggerLabel,
+		statusLabel, succeededUploads, failedUploads,
+	)
+	if len(dirLines) > 0 {
+		body += "- 目录明细:\n" + strings.Join(dirLines, "\n") + "\n"
+	}
+	if r.Error != "" {
+		body += fmt.Sprintf("- 错误信息: %s\n", r.Error)
+	}
+	body += fmt.Sprintf("- 完成时间: %s\n", time.Now().Format(time.RFC3339))
+
+	s.ensureNotifier().Dispatch(notify.Event{
+		EventKey:   "remote_backup.execute",
+		ResourceID: r.ID,
+		Subject:    subject,
+		Body:       body,
+		ShouldSend: func(rules notify.NotifyRules) bool {
+			return rules.RemoteBackup.ShouldNotify(succeeded)
+		},
+	})
 }
 
 func (s *Service) updateProgress(r *db.RemoteRun, stage string, directoryIndex, upstreamIndex int) {

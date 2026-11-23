@@ -91,7 +91,7 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 		}
 	}
 
-	var fc FileConfig
+	fc := FileConfig{SMTP: notify.DefaultSMTPConfig()}
 	if cfgPath != "" {
 		if _, err := os.Stat(cfgPath); err != nil {
 			if explicit {
@@ -168,6 +168,7 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 		smtpCfg.FromName = "SafeKeep"
 	}
 	smtpCfg, smtpChanged := ApplySMTPEnvOverrides(smtpCfg)
+	smtpCfg.Notifications = smtpCfg.Notifications.Normalize()
 	boot.SMTPDefaults = smtpCfg
 	boot.HasSMTPSection = smtpChanged || smtpCfg.Enabled || smtpCfg.Host != ""
 	return boot, nil

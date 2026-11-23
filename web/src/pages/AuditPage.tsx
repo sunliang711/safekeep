@@ -58,6 +58,7 @@ const ACTION_KEYS: Record<string, TranslationKey> = {
   'admin.update': 'audit.action.admin.update',
   'alert.oversize_rejected': 'audit.action.alert.oversize_rejected',
   'alert.circuit_breaker_tripped': 'audit.action.alert.circuit_breaker_tripped',
+  'notify.email': 'audit.action.notify.email',
 }
 
 const RESOURCE_KEYS: Record<string, TranslationKey> = {
@@ -132,7 +133,7 @@ const ACTION_GROUPS: { labelKey: TranslationKey; actions: string[] }[] = [
   },
   {
     labelKey: 'audit.actionGroup.alert',
-    actions: ['alert.oversize_rejected', 'alert.circuit_breaker_tripped'],
+    actions: ['alert.oversize_rejected', 'alert.circuit_breaker_tripped', 'notify.email'],
   },
 ]
 
@@ -336,8 +337,12 @@ export const AuditPage: React.FC = () => {
       }
       case 'alert_email': {
         const recipients = Array.isArray(d?.to) && d.to.length > 0 ? d.to.join(', ') : ''
-        if (recipients) return `${t('audit.summary.smtpRecipients', { to: recipients })}${errText ? ` · ${errText}` : ''}`
-        if (errText) return errText
+        const title = d?.subject ? String(d.subject) : d?.event ? String(d.event) : ''
+        const parts: string[] = []
+        if (title) parts.push(title)
+        if (recipients) parts.push(t('audit.summary.smtpRecipients', { to: recipients }))
+        if (errText) parts.push(errText)
+        if (parts.length > 0) return parts.join(' · ')
         return log.resource_id || ''
       }
       default:

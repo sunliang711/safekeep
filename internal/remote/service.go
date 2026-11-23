@@ -18,6 +18,7 @@ import (
 	"safekeep/internal/backup"
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
+	"safekeep/internal/notify"
 	"safekeep/internal/storage"
 )
 
@@ -34,10 +35,12 @@ type Service struct {
 	registry *storage.Registry
 	backup   *backup.Service
 	audit    *audit.Logger
+	notifier *notify.Dispatcher
 	logger   *slog.Logger
 	ctx      context.Context
 	cancel   context.CancelFunc
 	mu       sync.Mutex
+	notifyMu sync.Mutex
 	configMu sync.Mutex
 	cron     *cron.Cron
 	entries  []cron.EntryID
@@ -94,6 +97,34 @@ func (s *Service) Start() error {
 	return nil
 }
 
+func (s *Service) SetNotifier(n *notify.Dispatcher) {
+	s.notifyMu.Lock()
+	s.notifier = n
+	s.notifyMu.Unlock()
+}
+
+func (s *Service) ensureNotifier() *notify.Dispatcher {
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+	if s.notifier == nil {
+		s.notifier = notify.NewDispatcher(s.ctx,
+			func(ctx context.Context) (notify.SMTPConfig, error) {
+				return s.store.GetSMTPConfig(ctx, s.cipher)
+			},
+			func(ctx context.Context, action, resourceID, status string, detail map[string]any) {
+				if s.audit != nil {
+					s.audit.Record(ctx, audit.Event{
+						ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+						Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+						Status: status, Detail: detail,
+					})
+				}
+			},
+		)
+	}
+	return s.notifier
+}
+
 func (s *Service) Stop() {
 	s.mu.Lock()
 	s.closed = true
@@ -104,6 +135,12 @@ func (s *Service) Stop() {
 		<-c.Stop().Done()
 	}
 	s.wg.Wait()
+	s.notifyMu.Lock()
+	n := s.notifier
+	s.notifyMu.Unlock()
+	if n != nil {
+		n.Wait()
+	}
 }
 
 func (s *Service) Reload(ctx context.Context) error {

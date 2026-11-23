@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"safekeep/internal/audit"
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
+	"safekeep/internal/notify"
 	"safekeep/internal/proxy"
 )
 
@@ -134,6 +136,14 @@ func (s *Server) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordProxyAudit(r, "proxy.delete", p)
+	admin := currentAdmin(r)
+	s.notifyAdminEvent(
+		"proxy.delete",
+		p.ID,
+		fmt.Sprintf("[SafeKeep 通知] 网络代理已删除 (%s)", p.Name),
+		fmt.Sprintf("管理员删除了网络代理：\n\n- 管理员: %s\n- 代理: %s (%s, %s:%d)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, p.Name, p.Type, p.Host, p.Port, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.ResourceDelete },
+	)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -149,6 +159,14 @@ func (s *Server) handleRevealProxySecrets(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.recordProxyAudit(r, "proxy.reveal_secrets", p)
+	admin := currentAdmin(r)
+	s.notifyAdminEvent(
+		"proxy.reveal_secrets",
+		p.ID,
+		fmt.Sprintf("[SafeKeep 安全通知] 代理认证密码被查看 (%s)", p.Name),
+		fmt.Sprintf("管理员查看了代理密码：\n\n- 管理员: %s\n- 代理: %s (%s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, p.Name, p.ID, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.SecretsReveal },
+	)
 	writeJSON(w, http.StatusOK, map[string]string{"password": password})
 }
 

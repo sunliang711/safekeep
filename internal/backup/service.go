@@ -77,6 +77,7 @@ type Service struct {
 	registry *storage.Registry
 	enqueuer TaskEnqueuer
 	auditLog *audit.Logger
+	notifier *notify.Dispatcher
 	appCtx   context.Context
 	hookHTTP *http.Client
 
@@ -145,9 +146,43 @@ func (s *Service) SetAuditLogger(a *audit.Logger) {
 	s.auditLog = a
 }
 
-// Wait blocks until all background sync-fallback and webhook goroutines finish.
+func (s *Service) SetNotifier(n *notify.Dispatcher) {
+	s.mu.Lock()
+	s.notifier = n
+	s.mu.Unlock()
+}
+
+func (s *Service) ensureNotifier() *notify.Dispatcher {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifier == nil {
+		s.notifier = notify.NewDispatcher(s.appCtx,
+			func(ctx context.Context) (notify.SMTPConfig, error) {
+				return s.store.GetSMTPConfig(ctx, s.cipher)
+			},
+			func(ctx context.Context, action, resourceID, status string, detail map[string]any) {
+				if s.auditLog != nil {
+					s.auditLog.Record(ctx, audit.Event{
+						ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+						Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+						Status: status, Detail: detail,
+					})
+				}
+			},
+		)
+	}
+	return s.notifier
+}
+
+// Wait blocks until all background sync-fallback, webhook, and notification goroutines finish.
 func (s *Service) Wait() {
 	s.wg.Wait()
+	s.mu.Lock()
+	n := s.notifier
+	s.mu.Unlock()
+	if n != nil {
+		n.Wait()
+	}
 }
 
 func (s *Service) tryStartTask(taskID string) bool {
@@ -273,42 +308,84 @@ func (s *Service) notifyCircuitBreakerTripped(client *db.Client, filename string
 }
 
 func (s *Service) spawnAlertEmail(action, resourceID, subject, body string) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ctx, cancel := context.WithTimeout(s.appCtx, 20*time.Second)
-		defer cancel()
-
-		cfg, err := s.store.GetSMTPConfig(ctx, s.cipher)
-		if err != nil {
-			if s.auditLog != nil {
-				s.auditLog.Record(ctx, audit.Event{
-					ActorType: "system", ActorID: "notifier", ActorName: "smtp",
-					Action: action, ResourceType: "alert_email", ResourceID: resourceID,
-					Status: "failure", Detail: map[string]any{"error": err.Error()},
-				})
+	s.ensureNotifier().Dispatch(notify.Event{
+		EventKey:    action,
+		AuditAction: action,
+		ResourceID:  resourceID,
+		Subject:     subject,
+		Body:        body,
+		ShouldSend: func(r notify.NotifyRules) bool {
+			switch action {
+			case "alert.oversize_rejected":
+				return r.OversizeRejected
+			case "alert.circuit_breaker_tripped":
+				return r.CircuitBreakerTripped
+			default:
+				return true
 			}
-			return
-		}
-		if !cfg.Enabled {
-			return
-		}
+		},
+	})
+}
 
-		sendErr := notify.Send(ctx, cfg, subject, body)
-		if s.auditLog != nil {
-			status := "success"
-			detail := map[string]any{"subject": subject, "to": cfg.ToEmails}
-			if sendErr != nil {
-				status = "failure"
-				detail["error"] = sendErr.Error()
-			}
-			s.auditLog.Record(ctx, audit.Event{
-				ActorType: "system", ActorID: "notifier", ActorName: "smtp",
-				Action: action, ResourceType: "alert_email", ResourceID: resourceID,
-				Status: status, Detail: detail,
-			})
+func (s *Service) notifyBackupTaskResult(task *db.BackupTask) {
+	if task == nil {
+		return
+	}
+	succeeded := task.Status == "succeeded"
+	statusLabel := "成功"
+	switch task.Status {
+	case "partial_success":
+		statusLabel = "部分成功"
+	case "failed":
+		statusLabel = "失败"
+	}
+	clientLabel := task.ClientName
+	if clientLabel == "" {
+		clientLabel = task.ClientID
+	}
+	fileLabel := task.RemoteFilename
+	if fileLabel == "" {
+		fileLabel = task.OriginalFilename
+	}
+	var targetLines []string
+	for _, it := range task.Items {
+		line := fmt.Sprintf("  - %s (%s): %s", it.UpstreamName, it.UpstreamType, it.Status)
+		if it.ErrorMessage != "" {
+			line += " — " + it.ErrorMessage
 		}
-	}()
+		targetLines = append(targetLines, line)
+	}
+	subject := fmt.Sprintf("[SafeKeep] 备份上传%s (%s)", statusLabel, fileLabel)
+	body := fmt.Sprintf(
+		"SafeKeep 备份任务已结束：\n\n"+
+			"- 任务 ID: %s\n"+
+			"- 客户: %s (%s)\n"+
+			"- 文件: %s (%d bytes)\n"+
+			"- 模式: %s%s\n"+
+			"- 结果: %s\n",
+		task.ID,
+		clientLabel, task.ClientID,
+		fileLabel, task.FileSize,
+		task.Mode, map[bool]string{true: " [秒传去重]", false: ""}[task.Deduplicated],
+		statusLabel,
+	)
+	if len(targetLines) > 0 {
+		body += "- 目标上游:\n" + strings.Join(targetLines, "\n") + "\n"
+	}
+	if task.ErrorSummary != "" {
+		body += fmt.Sprintf("- 错误摘要: %s\n", task.ErrorSummary)
+	}
+	body += fmt.Sprintf("- 时间: %s\n", time.Now().Format(time.RFC3339))
+
+	s.ensureNotifier().Dispatch(notify.Event{
+		EventKey:   "backup.upload",
+		ResourceID: task.ID,
+		Subject:    subject,
+		Body:       body,
+		ShouldSend: func(r notify.NotifyRules) bool {
+			return r.BackupUpload.ShouldNotify(succeeded)
+		},
+	})
 }
 
 func (s *Service) checkSpoolQuota(spoolDir string, maxSpoolBytes int64) error {
@@ -548,9 +625,13 @@ func (s *Service) HandleUpload(ctx context.Context, req UploadRequest) (*UploadR
 			return replay, err
 		}
 		task.Items = items
+		if req.Client != nil {
+			task.ClientName = req.Client.Name
+		}
 		if task.WebhookStatus == "pending" {
 			s.spawnWebhook(task.ID)
 		}
+		s.notifyBackupTaskResult(task)
 		return &UploadResponse{
 			StatusCode: http.StatusOK,
 			Task:       task,
@@ -818,7 +899,11 @@ func (s *Service) finalizeTaskState(ctx context.Context, taskID string) {
 		finalStatus = "failed"
 	}
 
-	_ = s.store.UpdateTaskStatus(ctx, task.ID, finalStatus, strings.Join(errs, "; "), nil, &fin)
+	errSummary := strings.Join(errs, "; ")
+	_ = s.store.UpdateTaskStatus(ctx, task.ID, finalStatus, errSummary, nil, &fin)
+	task.Status = finalStatus
+	task.ErrorSummary = errSummary
+	task.FinishedAt = &fin
 
 	if finalStatus == "succeeded" && task.SpoolPath != "" && !task.SpoolCleaned {
 		if err := os.Remove(task.SpoolPath); err == nil || errors.Is(err, os.ErrNotExist) {
@@ -829,6 +914,7 @@ func (s *Service) finalizeTaskState(ctx context.Context, taskID string) {
 	if task.WebhookStatus == "pending" {
 		s.spawnWebhook(task.ID)
 	}
+	s.notifyBackupTaskResult(task)
 }
 
 func (s *Service) spawnWebhook(taskID string) {

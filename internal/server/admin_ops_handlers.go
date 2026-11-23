@@ -229,6 +229,13 @@ func (s *Server) handleRevealCronJobSecrets(w http.ResponseWriter, r *http.Reque
 		RequestID:    middleware.GetReqID(r.Context()),
 		Detail:       map[string]any{"job_key": job.JobKey},
 	})
+	s.notifyAdminEvent(
+		"cron.reveal_secrets",
+		job.ID,
+		fmt.Sprintf("[SafeKeep 安全通知] 定时任务密钥被查看 (%s)", job.JobKey),
+		fmt.Sprintf("管理员查看了定时任务密钥：\n\n- 管理员: %s\n- 任务 Key: %s\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, job.JobKey, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.SecretsReveal },
+	)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"api_key":    apiKey,
 		"passphrase": passphrase,
@@ -472,15 +479,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 // --- SMTP & Circuit Breaker ---
 
 type smtpDTO struct {
-	Enabled     bool     `json:"enabled"`
-	Host        string   `json:"host"`
-	Port        int      `json:"port"`
-	TLSMode     string   `json:"tls_mode"`
-	Username    string   `json:"username"`
-	HasPassword bool     `json:"has_password"`
-	FromEmail   string   `json:"from_email"`
-	FromName    string   `json:"from_name"`
-	ToEmails    []string `json:"to_emails"`
+	Enabled       bool               `json:"enabled"`
+	Host          string             `json:"host"`
+	Port          int                `json:"port"`
+	TLSMode       string             `json:"tls_mode"`
+	Username      string             `json:"username"`
+	HasPassword   bool               `json:"has_password"`
+	FromEmail     string             `json:"from_email"`
+	FromName      string             `json:"from_name"`
+	ToEmails      []string           `json:"to_emails"`
+	Notifications notify.NotifyRules `json:"notifications"`
 }
 
 // smtpAdminDTO is returned only to authenticated admin UI requests so the
@@ -496,15 +504,16 @@ func toSMTPDTO(c notify.SMTPConfig) smtpDTO {
 		to = []string{}
 	}
 	return smtpDTO{
-		Enabled:     c.Enabled,
-		Host:        c.Host,
-		Port:        c.Port,
-		TLSMode:     c.TLSMode,
-		Username:    c.Username,
-		HasPassword: c.Password != "" || c.PasswordEncrypted != "",
-		FromEmail:   c.FromEmail,
-		FromName:    c.FromName,
-		ToEmails:    to,
+		Enabled:       c.Enabled,
+		Host:          c.Host,
+		Port:          c.Port,
+		TLSMode:       c.TLSMode,
+		Username:      c.Username,
+		HasPassword:   c.Password != "" || c.PasswordEncrypted != "",
+		FromEmail:     c.FromEmail,
+		FromName:      c.FromName,
+		ToEmails:      to,
+		Notifications: c.Notifications.Normalize(),
 	}
 }
 
@@ -516,28 +525,34 @@ func toSMTPAdminDTO(c notify.SMTPConfig) smtpAdminDTO {
 }
 
 type smtpUpdateReq struct {
-	Enabled       bool     `json:"enabled"`
-	Host          string   `json:"host"`
-	Port          int      `json:"port"`
-	TLSMode       string   `json:"tls_mode"`
-	Username      string   `json:"username"`
-	Password      *string  `json:"password"`
-	ClearPassword bool     `json:"clear_password"`
-	FromEmail     string   `json:"from_email"`
-	FromName      string   `json:"from_name"`
-	ToEmails      []string `json:"to_emails"`
+	Enabled       bool                `json:"enabled"`
+	Host          string              `json:"host"`
+	Port          int                 `json:"port"`
+	TLSMode       string              `json:"tls_mode"`
+	Username      string              `json:"username"`
+	Password      *string             `json:"password"`
+	ClearPassword bool                `json:"clear_password"`
+	FromEmail     string              `json:"from_email"`
+	FromName      string              `json:"from_name"`
+	ToEmails      []string            `json:"to_emails"`
+	Notifications *notify.NotifyRules `json:"notifications"`
 }
 
 func (s *Server) mergeSMTPRequest(existing notify.SMTPConfig, req smtpUpdateReq) notify.SMTPConfig {
+	rules := existing.Notifications.Normalize()
+	if req.Notifications != nil {
+		rules = *req.Notifications
+	}
 	cfg := notify.SMTPConfig{
-		Enabled:   req.Enabled,
-		Host:      strings.TrimSpace(req.Host),
-		Port:      req.Port,
-		TLSMode:   strings.ToLower(strings.TrimSpace(req.TLSMode)),
-		Username:  strings.TrimSpace(req.Username),
-		FromEmail: strings.TrimSpace(req.FromEmail),
-		FromName:  strings.TrimSpace(req.FromName),
-		ToEmails:  req.ToEmails,
+		Enabled:       req.Enabled,
+		Host:          strings.TrimSpace(req.Host),
+		Port:          req.Port,
+		TLSMode:       strings.ToLower(strings.TrimSpace(req.TLSMode)),
+		Username:      strings.TrimSpace(req.Username),
+		FromEmail:     strings.TrimSpace(req.FromEmail),
+		FromName:      strings.TrimSpace(req.FromName),
+		ToEmails:      req.ToEmails,
+		Notifications: rules,
 	}
 	if cfg.Port == 0 {
 		cfg.Port = 587
@@ -582,6 +597,7 @@ func (s *Server) handleUpdateSMTPSettings(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid_smtp", err.Error())
 		return
 	}
+	cfg.Notifications = cfg.Notifications.Normalize()
 	if err := s.store.SaveSMTPConfig(r.Context(), s.cipher, cfg, admin.Username); err != nil {
 		writeError(w, http.StatusInternalServerError, "save_smtp_failed", err.Error())
 		return
@@ -672,6 +688,13 @@ func (s *Server) handleResetCircuitBreaker(w http.ResponseWriter, r *http.Reques
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
 	})
+	s.notifyAdminEvent(
+		"circuit_breaker.reset",
+		dateKey,
+		fmt.Sprintf("[SafeKeep 安全通知] 今日流量熔断已被解除 (%s)", dateKey),
+		fmt.Sprintf("管理员重置了每日流量熔断状态：\n\n- 管理员: %s\n- 日期: %s\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, dateKey, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
+	)
 	writeJSON(w, http.StatusOK, dt)
 }
 
@@ -724,6 +747,13 @@ func (s *Server) handleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 		IPAddress:    clientIP(r),
 		Detail:       map[string]any{"username": a.Username},
 	})
+	s.notifyAdminEvent(
+		"admin.create",
+		a.ID,
+		fmt.Sprintf("[SafeKeep 安全通知] 新增管理员账号 (%s)", a.Username),
+		fmt.Sprintf("管理员创建了新账号：\n\n- 操作管理员: %s\n- 新增账号: %s (%s)\n- 来源 IP: %s\n- 时间: %s\n", actor.Username, a.Username, a.ID, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
+	)
 	writeJSON(w, http.StatusCreated, a)
 }
 
@@ -789,6 +819,13 @@ func (s *Server) handleUpdateAdmin(w http.ResponseWriter, r *http.Request) {
 		ResourceID:   id,
 		IPAddress:    clientIP(r),
 	})
+	s.notifyAdminEvent(
+		"admin.update",
+		id,
+		fmt.Sprintf("[SafeKeep 安全通知] 管理员账号状态/密码已变更 (%s)", a.Username),
+		fmt.Sprintf("管理员更新了账号信息：\n\n- 操作管理员: %s\n- 目标账号: %s (%s)\n- 启用状态: %v\n- 来源 IP: %s\n- 时间: %s\n", actor.Username, a.Username, a.ID, a.IsActive, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
+	)
 	writeJSON(w, http.StatusOK, a)
 }
 
@@ -820,6 +857,13 @@ func (s *Server) handleMigrationExport(w http.ResponseWriter, r *http.Request) {
 			"size_bytes":         len(bundleBytes),
 		},
 	})
+	s.notifyAdminEvent(
+		"migration.export",
+		"",
+		"[SafeKeep 通知] 环境迁移包已导出",
+		fmt.Sprintf("管理员导出了环境迁移包：\n\n- 管理员: %s\n- 文件大小: %d bytes\n- 包含任务: %v\n- 包含管理员: %v\n- 包含审计日志: %v\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, len(bundleBytes), opts.IncludeTasks, opts.IncludeAdmins, opts.IncludeAuditLogs, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.MigrationExport },
+	)
 	filename := fmt.Sprintf("safekeep-migration-%s.skbundle", time.Now().UTC().Format("20060102-150405"))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
@@ -891,6 +935,13 @@ func (s *Server) handleMigrationImport(w http.ResponseWriter, r *http.Request) {
 			IPAddress:    clientIP(r),
 			Detail:       map[string]any{"error": err.Error()},
 		})
+		s.notifyAdminEvent(
+			"migration.import",
+			"",
+			"[SafeKeep 通知] 环境迁移包导入失败",
+			fmt.Sprintf("管理员尝试导入恢复环境迁移包失败：\n\n- 管理员: %s\n- 模式: %s\n- 错误: %s\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, opts.Mode, err.Error(), clientIP(r), time.Now().Format(time.RFC3339)),
+			func(rules notify.NotifyRules) bool { return rules.MigrationImport },
+		)
 		writeError(w, http.StatusBadRequest, "import_failed", err.Error())
 		return
 	}
@@ -914,5 +965,12 @@ func (s *Server) handleMigrationImport(w http.ResponseWriter, r *http.Request) {
 		IPAddress:    clientIP(r),
 		Detail:       map[string]any{"mode": opts.Mode, "conflict_strategy": opts.ConflictStrategy, "counts": counts},
 	})
+	s.notifyAdminEvent(
+		"migration.import",
+		"",
+		"[SafeKeep 通知] 环境迁移包导入成功",
+		fmt.Sprintf("管理员已完成环境迁移包导入恢复：\n\n- 管理员: %s\n- 模式: %s (冲突策略: %s)\n- 恢复数量: 上游 %d · 客户 %d · 定时任务 %d\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, opts.Mode, opts.ConflictStrategy, counts.Upstreams, counts.Clients, counts.CronJobs, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.MigrationImport },
+	)
 	writeJSON(w, http.StatusOK, map[string]any{"counts": counts})
 }

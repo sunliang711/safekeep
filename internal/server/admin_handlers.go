@@ -19,6 +19,7 @@ import (
 	"safekeep/internal/backup"
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
+	"safekeep/internal/notify"
 	"safekeep/internal/proxy"
 	"safekeep/internal/storage"
 	"safekeep/internal/storage/dropbox"
@@ -101,9 +102,10 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	admin, err := s.store.GetAdminByUsername(r.Context(), strings.TrimSpace(req.Username))
 	if err != nil || !admin.IsActive || !crypto.VerifyPassword(admin.PasswordHash, req.Password) {
+		loginUser := strings.TrimSpace(req.Username)
 		s.auditLog.Record(r.Context(), audit.Event{
 			ActorType:    "admin",
-			ActorName:    strings.TrimSpace(req.Username),
+			ActorName:    loginUser,
 			Action:       "admin.login",
 			ResourceType: "admin",
 			Status:       "failure",
@@ -111,6 +113,13 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 			UserAgent:    r.UserAgent(),
 			RequestID:    middleware.GetReqID(r.Context()),
 		})
+		s.notifyAdminEvent(
+			"admin.login",
+			loginUser,
+			fmt.Sprintf("[SafeKeep 安全通知] 管理员登录失败 (%s)", loginUser),
+			fmt.Sprintf("检测到失败的管理员登录尝试：\n\n- 尝试用户名: %s\n- 来源 IP: %s\n- User-Agent: %s\n- 时间: %s\n", loginUser, clientIP(r), r.UserAgent(), time.Now().Format(time.RFC3339)),
+			func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
+		)
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid username or password")
 		return
 	}
@@ -133,6 +142,13 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
 	})
+	s.notifyAdminEvent(
+		"admin.login",
+		admin.ID,
+		fmt.Sprintf("[SafeKeep 安全通知] 管理员登录成功 (%s)", admin.Username),
+		fmt.Sprintf("管理员已登录控制台：\n\n- 管理员: %s (%s)\n- 来源 IP: %s\n- User-Agent: %s\n- 时间: %s\n", admin.Username, admin.ID, clientIP(r), r.UserAgent(), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
+	)
 	writeJSON(w, http.StatusOK, map[string]any{"admin": admin, "token": tok})
 }
 
@@ -195,6 +211,13 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
 	})
+	s.notifyAdminEvent(
+		"admin.change_password",
+		admin.ID,
+		fmt.Sprintf("[SafeKeep 安全通知] 管理员修改密码 (%s)", admin.Username),
+		fmt.Sprintf("管理员修改了自己的登录密码：\n\n- 管理员: %s (%s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, admin.ID, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
+	)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -383,6 +406,13 @@ func (s *Server) handleRevealUpstreamSecrets(w http.ResponseWriter, r *http.Requ
 		RequestID:    middleware.GetReqID(r.Context()),
 		Detail:       map[string]any{"name": u.Name, "type": u.Type},
 	})
+	s.notifyAdminEvent(
+		"upstream.reveal_secrets",
+		u.ID,
+		fmt.Sprintf("[SafeKeep 安全通知] 上游存储密钥被查看 (%s)", u.Name),
+		fmt.Sprintf("管理员查看了上游存储密钥：\n\n- 管理员: %s\n- 上游: %s (%s, %s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, u.Name, u.Type, u.ID, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.SecretsReveal },
+	)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -717,6 +747,15 @@ func mergeUpstreamConfigSecrets(upstreamType string, existingRaw, incomingRaw js
 func (s *Server) handleDeleteUpstream(w http.ResponseWriter, r *http.Request) {
 	admin := currentAdmin(r)
 	id := chi.URLParam(r, "id")
+	u, err := s.store.GetUpstreamByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "upstream not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
 	if err := s.store.DeleteUpstream(r.Context(), id); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "upstream not found")
@@ -736,7 +775,15 @@ func (s *Server) handleDeleteUpstream(w http.ResponseWriter, r *http.Request) {
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
+		Detail:       map[string]any{"name": u.Name, "type": u.Type},
 	})
+	s.notifyAdminEvent(
+		"upstream.delete",
+		id,
+		fmt.Sprintf("[SafeKeep 通知] 上游存储已删除 (%s)", u.Name),
+		fmt.Sprintf("管理员删除了上游存储：\n\n- 管理员: %s\n- 上游: %s (%s, %s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, u.Name, u.Type, id, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.ResourceDelete },
+	)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -1175,6 +1222,13 @@ func (s *Server) handleRevealClientSecrets(w http.ResponseWriter, r *http.Reques
 		RequestID:    middleware.GetReqID(r.Context()),
 		Detail:       map[string]any{"name": c.Name},
 	})
+	s.notifyAdminEvent(
+		"client.reveal_secrets",
+		c.ID,
+		fmt.Sprintf("[SafeKeep 安全通知] 客户密钥被查看 (%s)", c.Name),
+		fmt.Sprintf("管理员查看了客户 API Key / Webhook 密钥：\n\n- 管理员: %s\n- 客户: %s (%s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, c.Name, c.ID, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.SecretsReveal },
+	)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"api_key":        apiKey,
 		"webhook_secret": whSecret,
@@ -1440,12 +1494,28 @@ func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 		RequestID:    middleware.GetReqID(r.Context()),
 		Detail:       map[string]any{"name": c.Name, "key_prefix": c.KeyPrefix},
 	})
+	s.notifyAdminEvent(
+		"client.delete",
+		id,
+		fmt.Sprintf("[SafeKeep 安全通知] 客户已删除 (%s)", c.Name),
+		fmt.Sprintf("管理员删除了客户策略：\n\n- 管理员: %s\n- 客户名称: %s (%s)\n- 密钥前缀: %s\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, c.Name, id, c.KeyPrefix, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.ClientDelete },
+	)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (s *Server) handleRotateClientKey(w http.ResponseWriter, r *http.Request) {
 	admin := currentAdmin(r)
 	id := chi.URLParam(r, "id")
+	c, err := s.store.GetClientByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "client not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
 	plainKey, prefix, hash, err := crypto.GenerateAPIKey()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "keygen_error", err.Error())
@@ -1474,8 +1544,15 @@ func (s *Server) handleRotateClientKey(w http.ResponseWriter, r *http.Request) {
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
-		Detail:       map[string]any{"new_prefix": prefix},
+		Detail:       map[string]any{"name": c.Name, "new_prefix": prefix},
 	})
+	s.notifyAdminEvent(
+		"client.rotate_key",
+		id,
+		fmt.Sprintf("[SafeKeep 安全通知] 客户 API Key 已轮换 (%s)", c.Name),
+		fmt.Sprintf("管理员轮换了客户 API Key：\n\n- 管理员: %s\n- 客户名称: %s (%s)\n- 新密钥前缀: %s\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, c.Name, id, prefix, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.ClientKeyRotate },
+	)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"api_key":    plainKey,
 		"key_prefix": prefix,

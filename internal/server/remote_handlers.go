@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"safekeep/internal/audit"
 	"safekeep/internal/db"
+	"safekeep/internal/notify"
 	"safekeep/internal/remote"
 	"safekeep/internal/scheduler"
 )
@@ -127,11 +129,24 @@ func (s *Server) handleSaveRemoteHost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	h, _ := s.store.GetRemoteHost(r.Context(), id)
 	if err := s.remoteSvc.DeleteHost(r.Context(), id); err != nil {
 		s.remoteError(w, err)
 		return
 	}
 	s.remoteAudit(r, "remote_host.delete", "remote_host", id, "success")
+	name := id
+	if h != nil && h.Name != "" {
+		name = h.Name
+	}
+	admin := currentAdmin(r)
+	s.notifyAdminEvent(
+		"remote_host.delete",
+		id,
+		fmt.Sprintf("[SafeKeep 通知] 远程主机已删除 (%s)", name),
+		fmt.Sprintf("管理员删除了远程主机：\n\n- 管理员: %s\n- 主机: %s (%s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, name, id, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.ResourceDelete },
+	)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -184,11 +199,24 @@ func (s *Server) handleSaveRemoteJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteRemoteJob(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	j, _ := s.store.GetRemoteJob(r.Context(), id)
 	if err := s.remoteSvc.DeleteJob(r.Context(), id); err != nil {
 		s.remoteError(w, err)
 		return
 	}
 	s.remoteAudit(r, "remote_backup.delete", "remote_backup_job", id, "success")
+	name := id
+	if j != nil && j.Name != "" {
+		name = j.Name
+	}
+	admin := currentAdmin(r)
+	s.notifyAdminEvent(
+		"remote_backup.delete",
+		id,
+		fmt.Sprintf("[SafeKeep 通知] 远程备份任务已删除 (%s)", name),
+		fmt.Sprintf("管理员删除了远程备份任务：\n\n- 管理员: %s\n- 任务: %s (%s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, name, id, clientIP(r), time.Now().Format(time.RFC3339)),
+		func(rules notify.NotifyRules) bool { return rules.ResourceDelete },
+	)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

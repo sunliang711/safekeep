@@ -173,6 +173,24 @@ export interface SystemSettings {
   public_base_url: string;
 }
 
+export type NotifyMode = 'off' | 'failure' | 'always';
+
+export interface NotifyRules {
+  circuit_breaker_tripped: boolean;
+  oversize_rejected: boolean;
+  backup_upload: NotifyMode;
+  remote_backup: NotifyMode;
+  migration_backup: NotifyMode;
+  migration_export: boolean;
+  migration_import: boolean;
+  upstream_health_check: boolean;
+  client_delete: boolean;
+  client_key_rotate: boolean;
+  resource_delete: boolean;
+  secrets_reveal: boolean;
+  admin_security: boolean;
+}
+
 export interface SMTPConfig {
   enabled: boolean;
   host: string;
@@ -184,6 +202,7 @@ export interface SMTPConfig {
   from_email: string;
   from_name: string;
   to_emails: string[];
+  notifications: NotifyRules;
 }
 
 export interface DailyTraffic {

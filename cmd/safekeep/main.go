@@ -19,6 +19,7 @@ import (
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
 	"safekeep/internal/migration"
+	"safekeep/internal/notify"
 	"safekeep/internal/queue"
 	"safekeep/internal/remote"
 	"safekeep/internal/scheduler"
@@ -116,12 +117,28 @@ func main() {
 	registry.RegisterBuilder("dropbox", dropbox.Builder)
 
 	auditLog := audit.NewLogger(store)
+	notifier := notify.NewDispatcher(appCtx,
+		func(ctx context.Context) (notify.SMTPConfig, error) {
+			return store.GetSMTPConfig(ctx, cipher)
+		},
+		func(ctx context.Context, action, resourceID, status string, detail map[string]any) {
+			auditLog.Record(ctx, audit.Event{
+				ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+				Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+				Status: status, Detail: detail,
+			})
+		},
+	)
+	defer notifier.Wait()
+
 	backupSvc := backup.NewService(appCtx, store, cipher, registry)
 	backupSvc.SetAuditLogger(auditLog)
+	backupSvc.SetNotifier(notifier)
 	pool := queue.NewWorkerPool(store, backupSvc, settings.WorkerConcurrency, logger)
 	backupSvc.SetEnqueuer(pool)
 	pool.Start(appCtx)
 	remoteSvc := remote.NewService(appCtx, store, cipher, registry, backupSvc, auditLog, logger)
+	remoteSvc.SetNotifier(notifier)
 	if err := remoteSvc.Start(); err != nil {
 		logger.Error("start remote backup service failed", "err", err)
 		os.Exit(1)
@@ -130,6 +147,7 @@ func main() {
 	migSvc := migration.NewService(store, cipher)
 	sched := scheduler.NewEngine(appCtx, store, registry, auditLog, logger)
 	sched.SetMigrationBackupDeps(cipher, migSvc, scheduler.DeriveLocalBaseURL(boot.ListenAddr))
+	sched.SetNotifier(notifier)
 	if err := sched.Start(); err != nil {
 		logger.Error("start cron scheduler failed", "err", err)
 		os.Exit(1)
@@ -142,6 +160,7 @@ func main() {
 
 	srv := server.New(store, cipher, registry, backupSvc, pool, sched, migSvc, auditLog, logger, webFS)
 	srv.SetRemoteService(remoteSvc)
+	srv.SetNotifier(notifier)
 	srv.SetVersion(version)
 	srv.SetCORSOrigins(boot.CORSAllowedOrigins)
 	httpSrv := &http.Server{

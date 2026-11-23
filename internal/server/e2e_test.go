@@ -33,6 +33,7 @@ import (
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
 	"safekeep/internal/migration"
+	"safekeep/internal/notify"
 	"safekeep/internal/queue"
 	"safekeep/internal/scheduler"
 	"safekeep/internal/storage"
@@ -72,22 +73,39 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	auditLog := audit.NewLogger(store)
+	notifier := notify.NewDispatcher(appCtx,
+		func(ctx context.Context) (notify.SMTPConfig, error) {
+			return store.GetSMTPConfig(ctx, cipher)
+		},
+		func(ctx context.Context, action, resourceID, status string, detail map[string]any) {
+			auditLog.Record(ctx, audit.Event{
+				ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+				Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+				Status: status, Detail: detail,
+			})
+		},
+	)
 	backupSvc := backup.NewService(appCtx, store, cipher, reg)
+	backupSvc.SetAuditLogger(auditLog)
+	backupSvc.SetNotifier(notifier)
 	pool := queue.NewWorkerPool(store, backupSvc, 2, logger)
 	backupSvc.SetEnqueuer(pool)
 	pool.Start(appCtx)
 
+	migSvc := migration.NewService(store, cipher)
 	sched := scheduler.NewEngine(appCtx, store, reg, auditLog, logger)
+	sched.SetMigrationBackupDeps(cipher, migSvc, "")
+	sched.SetNotifier(notifier)
 	if err := sched.Start(); err != nil {
 		t.Fatalf("sched.Start: %v", err)
 	}
-	migSvc := migration.NewService(store, cipher)
 	webFS, err := web.DistFS()
 	if err != nil {
 		t.Fatalf("web.DistFS: %v", err)
 	}
 
 	s := New(store, cipher, reg, backupSvc, pool, sched, migSvc, auditLog, logger, webFS)
+	s.SetNotifier(notifier)
 	ts := httptest.NewServer(s.Router())
 	sched.SetMigrationBackupDeps(cipher, migSvc, ts.URL)
 
@@ -96,6 +114,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		sched.Stop()
 		cancel()
 		pool.Wait()
+		notifier.Wait()
 		_ = store.Close()
 	})
 

@@ -19,6 +19,7 @@ import (
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
 	"safekeep/internal/migration"
+	"safekeep/internal/notify"
 	"safekeep/internal/storage"
 	"safekeep/internal/storage/dropbox"
 )
@@ -146,6 +147,7 @@ type Engine struct {
 	store        *db.Store
 	registry     *storage.Registry
 	auditLog     *audit.Logger
+	notifier     *notify.Dispatcher
 	logger       *slog.Logger
 	cipher       *crypto.Cipher
 	migSvc       *migration.Service
@@ -181,6 +183,36 @@ func (e *Engine) SetMigrationBackupDeps(cipher *crypto.Cipher, migSvc *migration
 	e.localBaseURL = strings.TrimRight(strings.TrimSpace(localBaseURL), "/")
 }
 
+// SetNotifier configures the shared email notification dispatcher.
+func (e *Engine) SetNotifier(n *notify.Dispatcher) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.notifier = n
+}
+
+func (e *Engine) ensureNotifier() *notify.Dispatcher {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.notifier == nil && e.cipher != nil {
+		cipher := e.cipher
+		e.notifier = notify.NewDispatcher(e.appCtx,
+			func(ctx context.Context) (notify.SMTPConfig, error) {
+				return e.store.GetSMTPConfig(ctx, cipher)
+			},
+			func(ctx context.Context, action, resourceID, status string, detail map[string]any) {
+				if e.auditLog != nil {
+					e.auditLog.Record(ctx, audit.Event{
+						ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+						Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+						Status: status, Detail: detail,
+					})
+				}
+			},
+		)
+	}
+	return e.notifier
+}
+
 func (e *Engine) Start() error {
 	e.mu.Lock()
 	e.c = cron.New(cron.WithParser(cronParser))
@@ -193,10 +225,14 @@ func (e *Engine) Start() error {
 func (e *Engine) Stop() {
 	e.mu.Lock()
 	c := e.c
+	n := e.notifier
 	e.mu.Unlock()
 	if c != nil {
 		ctx := c.Stop()
 		<-ctx.Done()
+	}
+	if n != nil {
+		n.Wait()
 	}
 }
 
@@ -367,6 +403,9 @@ func (e *Engine) executeJob(ctx context.Context, jobID, triggerType, triggeredBy
 			},
 		})
 	}
+	if job.JobKey == "migration_backup" {
+		e.notifyMigrationBackup(job, triggerType, triggeredBy, status, summary, durationMs)
+	}
 
 	return run
 }
@@ -472,6 +511,8 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 			return 0, "", err
 		}
 		var checked, healthy, failed int64
+		var newlyFailed []string
+		var allFailed []string
 		for _, u := range ups {
 			if !u.Enabled {
 				continue
@@ -486,9 +527,39 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 			if err != nil {
 				failed++
 				_ = e.store.UpdateUpstreamTestStatus(ctx, u.ID, "failed", err.Error())
+				line := fmt.Sprintf("  - %s (%s): %v", u.Name, u.Type, err)
+				allFailed = append(allFailed, line)
+				if u.LastTestStatus != "failed" {
+					newlyFailed = append(newlyFailed, line)
+				}
 			} else {
 				healthy++
 				_ = e.store.UpdateUpstreamTestStatus(ctx, u.ID, "ok", "")
+			}
+		}
+		if len(newlyFailed) > 0 {
+			if n := e.ensureNotifier(); n != nil {
+				subject := fmt.Sprintf("[SafeKeep] 上游存储健康检查异常 (%d 个不可用)", failed)
+				body := fmt.Sprintf(
+					"SafeKeep 定时上游健康检查发现新异常：\n\n"+
+						"- 本次检查启用的上游数: %d (正常 %d / 异常 %d)\n"+
+						"- 新增异常上游:\n%s\n",
+					checked, healthy, failed,
+					strings.Join(newlyFailed, "\n"),
+				)
+				if len(allFailed) > len(newlyFailed) {
+					body += fmt.Sprintf("- 当前全部异常上游:\n%s\n", strings.Join(allFailed, "\n"))
+				}
+				body += fmt.Sprintf("- 检查时间: %s\n", time.Now().Format(time.RFC3339))
+				n.Dispatch(notify.Event{
+					EventKey:   "upstream_health_check",
+					ResourceID: job.ID,
+					Subject:    subject,
+					Body:       body,
+					ShouldSend: func(r notify.NotifyRules) bool {
+						return r.UpstreamHealthCheck
+					},
+				})
 			}
 		}
 		return checked, fmt.Sprintf("checked %d enabled upstreams: %d ok, %d failed", checked, healthy, failed), nil
@@ -531,6 +602,44 @@ func (e *Engine) dispatchJob(ctx context.Context, job *db.CronJob) (int64, strin
 	default:
 		return 0, "", fmt.Errorf("unknown job_key %q", job.JobKey)
 	}
+}
+
+func (e *Engine) notifyMigrationBackup(job *db.CronJob, triggerType, triggeredBy, status, summary string, durationMs int64) {
+	n := e.ensureNotifier()
+	if n == nil || job == nil {
+		return
+	}
+	succeeded := status == "succeeded"
+	statusLabel := "成功"
+	if !succeeded {
+		statusLabel = "失败"
+		if status == "timeout" {
+			statusLabel = "超时"
+		}
+	}
+	triggerLabel := "定时调度"
+	if triggerType == "manual" {
+		triggerLabel = "手动触发 (" + triggeredBy + ")"
+	}
+	subject := fmt.Sprintf("[SafeKeep] 环境迁移包自动备份%s", statusLabel)
+	body := fmt.Sprintf(
+		"SafeKeep 环境迁移包自动备份任务执行结束：\n\n"+
+			"- 触发方式: %s\n"+
+			"- 执行结果: %s\n"+
+			"- 耗时: %d ms\n"+
+			"- 摘要: %s\n"+
+			"- 完成时间: %s\n",
+		triggerLabel, statusLabel, durationMs, summary, time.Now().Format(time.RFC3339),
+	)
+	n.Dispatch(notify.Event{
+		EventKey:   "migration_backup",
+		ResourceID: job.ID,
+		Subject:    subject,
+		Body:       body,
+		ShouldSend: func(r notify.NotifyRules) bool {
+			return r.MigrationBackup.ShouldNotify(succeeded)
+		},
+	})
 }
 
 func intFromMap(m map[string]any, key string, fallback int) int {

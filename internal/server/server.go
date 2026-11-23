@@ -25,6 +25,7 @@ import (
 	"safekeep/internal/crypto"
 	"safekeep/internal/db"
 	"safekeep/internal/migration"
+	"safekeep/internal/notify"
 	"safekeep/internal/queue"
 	"safekeep/internal/remote"
 	"safekeep/internal/scheduler"
@@ -49,8 +50,9 @@ type Server struct {
 	remoteSvc *remote.Service
 	pool      *queue.WorkerPool
 	sched     *scheduler.Engine
-	migSvc    *migration.Service
+	migSvc      *migration.Service
 	auditLog    *audit.Logger
+	notifier    *notify.Dispatcher
 	logger      *slog.Logger
 	webFS       fs.FS
 	version     string
@@ -58,6 +60,8 @@ type Server struct {
 
 	rateMu      sync.Mutex
 	rateBuckets map[string]*rateWindow
+
+	notifyMu sync.Mutex
 
 	oauthMu     sync.Mutex
 	oauthStates map[string]oauthStateEntry
@@ -110,6 +114,45 @@ func (s *Server) SetVersion(v string) {
 	if strings.TrimSpace(v) != "" {
 		s.version = strings.TrimSpace(v)
 	}
+}
+
+// SetNotifier configures the shared email notification dispatcher.
+func (s *Server) SetNotifier(n *notify.Dispatcher) {
+	s.notifyMu.Lock()
+	s.notifier = n
+	s.notifyMu.Unlock()
+}
+
+func (s *Server) ensureNotifier() *notify.Dispatcher {
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+	if s.notifier == nil {
+		s.notifier = notify.NewDispatcher(context.Background(),
+			func(ctx context.Context) (notify.SMTPConfig, error) {
+				return s.store.GetSMTPConfig(ctx, s.cipher)
+			},
+			func(ctx context.Context, action, resourceID, status string, detail map[string]any) {
+				if s.auditLog != nil {
+					s.auditLog.Record(ctx, audit.Event{
+						ActorType: "system", ActorID: "notifier", ActorName: "smtp",
+						Action: action, ResourceType: "alert_email", ResourceID: resourceID,
+						Status: status, Detail: detail,
+					})
+				}
+			},
+		)
+	}
+	return s.notifier
+}
+
+func (s *Server) notifyAdminEvent(eventKey, resourceID, subject, body string, check func(notify.NotifyRules) bool) {
+	s.ensureNotifier().Dispatch(notify.Event{
+		EventKey:   eventKey,
+		ResourceID: resourceID,
+		Subject:    subject,
+		Body:       body,
+		ShouldSend: check,
+	})
 }
 
 func (s *Server) Router() http.Handler {

@@ -97,13 +97,9 @@ func (s *Store) UpdateSystemSettings(ctx context.Context, settings config.System
 	return tx.Commit()
 }
 
-// GetSMTPConfig loads SMTP alerting settings and decrypts the stored SMTP password.
+// GetSMTPConfig loads SMTP notification settings and decrypts the stored SMTP password.
 func (s *Store) GetSMTPConfig(ctx context.Context, cipher *crypto.Cipher) (notify.SMTPConfig, error) {
-	cfg := notify.SMTPConfig{
-		Port:     587,
-		TLSMode:  "starttls",
-		FromName: "SafeKeep",
-	}
+	cfg := notify.DefaultSMTPConfig()
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM system_settings WHERE key = 'smtp_config'`).Scan(&raw)
 	if err != nil {
@@ -115,6 +111,7 @@ func (s *Store) GetSMTPConfig(ctx context.Context, cipher *crypto.Cipher) (notif
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return cfg, err
 	}
+	cfg.Notifications = cfg.Notifications.Normalize()
 	if cfg.PasswordEncrypted != "" && cipher != nil {
 		plain, err := cipher.DecryptString(cfg.PasswordEncrypted)
 		if err != nil {
@@ -128,6 +125,7 @@ func (s *Store) GetSMTPConfig(ctx context.Context, cipher *crypto.Cipher) (notif
 // SaveSMTPConfig encrypts the SMTP password and persists SMTP settings into system_settings.
 func (s *Store) SaveSMTPConfig(ctx context.Context, cipher *crypto.Cipher, cfg notify.SMTPConfig, updatedBy string) error {
 	toStore := cfg
+	toStore.Notifications = toStore.Notifications.Normalize()
 	if cfg.Password != "" && cipher != nil {
 		enc, err := cipher.EncryptString(cfg.Password)
 		if err != nil {
