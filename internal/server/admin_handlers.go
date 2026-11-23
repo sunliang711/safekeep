@@ -1411,6 +1411,15 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 	admin := currentAdmin(r)
 	id := chi.URLParam(r, "id")
+	c, err := s.store.GetClientByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "client not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
 	if err := s.store.DeleteClient(r.Context(), id); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "client not found")
@@ -1429,6 +1438,7 @@ func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),
 		RequestID:    middleware.GetReqID(r.Context()),
+		Detail:       map[string]any{"name": c.Name, "key_prefix": c.KeyPrefix},
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
