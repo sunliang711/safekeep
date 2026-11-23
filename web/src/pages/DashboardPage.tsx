@@ -96,39 +96,49 @@ export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({
         </div>
       )}
 
-      <div className="rounded-2xl border border-indigo-100 dark:border-indigo-500/25 bg-gradient-to-r from-indigo-50 via-white to-white dark:from-indigo-950/60 dark:via-slate-900 dark:to-slate-900 p-6 sm:p-7 flex flex-wrap items-center justify-between gap-5">
-        <div className="flex gap-4 items-center">
-          <div className="hidden sm:grid w-12 h-12 place-items-center rounded-2xl bg-white dark:bg-indigo-500/15 border border-indigo-100 dark:border-indigo-500/30 text-indigo-500 dark:text-indigo-300">
-            <ShieldCheck className="w-7 h-7" />
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-stretch">
+        <div className="xl:col-span-6 flex flex-col gap-4">
+          <div className="rounded-2xl border border-indigo-100 dark:border-indigo-500/25 bg-gradient-to-r from-indigo-50 via-white to-white dark:from-indigo-950/60 dark:via-slate-900 dark:to-slate-900 p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex gap-4 items-center min-w-0">
+              <div className="hidden sm:grid w-11 h-11 place-items-center rounded-2xl bg-white dark:bg-indigo-500/15 border border-indigo-100 dark:border-indigo-500/30 text-indigo-500 dark:text-indigo-300 shrink-0">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-indigo-500 dark:text-indigo-400 mb-1">{t('dashboard.hero.eyebrow')}</div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                  {data.enabled_upstreams > 0 ? t('dashboard.hero.titleReady') : t('dashboard.hero.titleEmpty')}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">
+                  {data.enabled_upstreams > 0 ? t('dashboard.hero.descReady') : t('dashboard.hero.descEmpty')}
+                </p>
+              </div>
+            </div>
+            <button className="primary-button shrink-0" onClick={() => onNavigate(data.enabled_upstreams > 0 ? 'tasks' : 'upstreams')}>
+              {data.enabled_upstreams > 0 ? <Upload className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}
+              {data.enabled_upstreams > 0 ? t('dashboard.hero.btnReady') : t('dashboard.hero.btnEmpty')}
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           </div>
-          <div>
-            <div className="text-xs font-medium text-indigo-500 dark:text-indigo-400 mb-1.5">{t('dashboard.hero.eyebrow')}</div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              {data.enabled_upstreams > 0 ? t('dashboard.hero.titleReady') : t('dashboard.hero.titleEmpty')}
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
-              {data.enabled_upstreams > 0 ? t('dashboard.hero.descReady') : t('dashboard.hero.descEmpty')}
-            </p>
+
+          <div className="grid grid-cols-1 min-[380px]:grid-cols-2 lg:grid-cols-4 xl:grid-cols-2 gap-4 flex-1">
+            {cards.map((c) => (
+              <div key={c.label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 flex flex-col justify-between">
+                <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  {c.label}
+                  <span className="text-indigo-400 bg-indigo-50 dark:bg-indigo-500/15 p-2 rounded-lg shrink-0">{c.icon}</span>
+                </div>
+                <div className="mt-2">
+                  <div className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 tabular-nums">{c.value}</div>
+                  <div className="text-xs text-slate-400 dark:text-slate-400 mt-1">{c.sub}</div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-        <button className="primary-button" onClick={() => onNavigate(data.enabled_upstreams > 0 ? 'tasks' : 'upstreams')}>
-          {data.enabled_upstreams > 0 ? <Upload className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}
-          {data.enabled_upstreams > 0 ? t('dashboard.hero.btnReady') : t('dashboard.hero.btnEmpty')}
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
-      </div>
 
-      <div className="grid grid-cols-1 min-[380px]:grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map((c) => (
-          <div key={c.label} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5">
-            <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-              {c.label}
-              <span className="text-indigo-400 bg-indigo-50 dark:bg-indigo-500/15 p-2 rounded-lg">{c.icon}</span>
-            </div>
-            <div className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 mt-2 tabular-nums">{c.value}</div>
-            <div className="text-xs text-slate-400 dark:text-slate-400 mt-1">{c.sub}</div>
-          </div>
-        ))}
+        <div className="xl:col-span-6">
+          <APIUploadsChart stats={data.api_uploads} />
+        </div>
       </div>
 
       {data.daily_traffic && (
@@ -209,8 +219,6 @@ export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({
           </div>
         </div>
       )}
-
-      <APIUploadsChart stats={data.api_uploads} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5">

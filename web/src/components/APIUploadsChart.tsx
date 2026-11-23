@@ -50,13 +50,13 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
   }, [hovered, activeItem, lang, total])
 
   return (
-    <section className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5" aria-labelledby="api-uploads-title">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <section className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 h-full flex flex-col" aria-labelledby="api-uploads-title">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="api-uploads-title" className="font-semibold text-slate-900 dark:text-slate-100">{t('dashboard.uploads.title')}</h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.uploads.subtitle')}</p>
         </div>
-        <div role="group" aria-label={t('dashboard.uploads.period')} className="inline-flex rounded-lg bg-slate-100 dark:bg-slate-800 p-1 gap-1">
+        <div role="group" aria-label={t('dashboard.uploads.period')} className="inline-flex rounded-lg bg-slate-100 dark:bg-slate-800 p-1 gap-1 shrink-0">
           {periods.map((item) => (
             <button
               key={item.value}
@@ -74,9 +74,9 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
       </div>
 
       {total > 0 ? (
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-[16rem_minmax(0,20rem)] justify-center gap-6 items-center">
+        <div className="mt-5 flex-1 grid grid-cols-1 sm:grid-cols-[12rem_minmax(0,1fr)] justify-center gap-5 items-center">
           <div className="flex flex-col items-center gap-2">
-            <svg viewBox="0 0 240 240" className="w-56 h-56 sm:w-64 sm:h-64" role="img" aria-label={t('dashboard.uploads.chartAria', { total: number(total) })}>
+            <svg viewBox="0 0 240 240" className="w-44 h-44 sm:w-48 sm:h-48" role="img" aria-label={t('dashboard.uploads.chartAria', { total: number(total) })}>
               {counts.map((item) => {
                 const start = angle
                 const sweep = (item.upload_count / total) * Math.PI * 2
@@ -116,7 +116,7 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
               {t('dashboard.uploads.total', { count: number(total) })}
             </p>
           </div>
-          <ul className="w-full min-w-0 max-w-sm justify-self-center space-y-1 max-h-72 overflow-y-auto" aria-label={t('dashboard.uploads.legend')}>
+          <ul className="w-full min-w-0 space-y-1.5 max-h-60 overflow-y-auto" aria-label={t('dashboard.uploads.legend')}>
             {counts.map((item) => (
               <li key={item.client_id} className="flex items-center gap-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 text-sm">
                 <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: clientColors.get(item.client_id) }} aria-hidden="true" />
@@ -128,7 +128,9 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
           </ul>
         </div>
       ) : (
-        <EmptyState icon={<PieChart className="w-6 h-6" />} title={t('dashboard.uploads.emptyTitle')} description={t('dashboard.uploads.emptyDesc')} />
+        <div className="flex-1 flex items-center justify-center py-4">
+          <EmptyState icon={<PieChart className="w-6 h-6" />} title={t('dashboard.uploads.emptyTitle')} description={t('dashboard.uploads.emptyDesc')} />
+        </div>
       )}
 
       {hovered && activeItem && createPortal(
@@ -148,7 +150,7 @@ export const APIUploadsChart: React.FC<{ stats: UploadStats }> = ({ stats }) => 
         document.body
       )}
 
-      <p className="mt-4 text-xs text-slate-400 dark:text-slate-500">{t('dashboard.uploads.timezone', { timezone: stats.timezone })}</p>
+      <p className="mt-auto pt-4 text-xs text-slate-400 dark:text-slate-500">{t('dashboard.uploads.timezone', { timezone: stats.timezone })}</p>
     </section>
   )
 }
