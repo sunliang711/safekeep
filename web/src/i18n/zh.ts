@@ -143,6 +143,11 @@ export const zh = {
   'auth.setupSubmit': '创建账号并开始使用',
   'auth.loginSubmit': '登录控制台',
   'auth.securityNote': '凭证加密存储 · 仅限授权管理员访问',
+  'auth.sessionExpiredTitle': '登录已过期',
+  'auth.sessionExpiredSubtitle': '当前登录状态已失效，请重新验证身份以继续操作，页面上已填写的内容不会丢失。',
+  'auth.reloginSubmit': '重新登录',
+  'auth.backToLogin': '退出到登录页',
+  'auth.reloginSuccess': '登录已恢复',
 
   // Dashboard
   'dashboard.title': '概览仪表盘',

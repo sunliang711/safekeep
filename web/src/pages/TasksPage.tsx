@@ -3,7 +3,7 @@ import { CheckCircle2, Download, RotateCcw, Search, Upload, XCircle } from 'luci
 import { EmptyState } from '../components/Feedback'
 import { Modal } from '../components/Modal'
 import { AuditSelect } from '../components/AuditFilters'
-import { api, formatBytes, formatTime } from '../api'
+import { api, formatBytes, formatTime, isReauthenticating } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { useI18n } from '../contexts/I18nContext'
 import type { NavTab } from '../components/Layout'
@@ -159,6 +159,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
     const st = uploadResult.task.status
     if (st !== 'pending' && st !== 'running') return
     const timer = setInterval(async () => {
+      if (isReauthenticating()) return
       try {
         const latest = await api.getTask(uploadResult.task.id)
         setUploadResult((prev) => (prev ? { ...prev, task: latest } : null))

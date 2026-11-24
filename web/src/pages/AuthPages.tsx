@@ -1,9 +1,17 @@
-import React, { useState } from 'react'
+import React, { useId, useState } from 'react'
 import { ArrowRight, Cloud, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { api } from '../api'
+import { Modal } from '../components/Modal'
 import { PreferenceControls } from '../components/PreferenceControls'
+import { useToast } from '../components/Toast'
 import { useI18n } from '../contexts/I18nContext'
 import type { Admin } from '../types'
+
+function formatAuthError(err: any, t: ReturnType<typeof useI18n>['t']): string {
+  return err?.message === 'invalid username or password'
+    ? t('auth.invalidCredentials')
+    : err?.message || t('auth.actionFailed')
+}
 
 interface Props {
   mode: 'setup' | 'login'
@@ -34,7 +42,7 @@ export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) 
         mode === 'setup' ? await api.setupInit(username, password) : await api.login(username, password)
       onSuccess(res.admin)
     } catch (err: any) {
-      setError(err.message === 'invalid username or password' ? t('auth.invalidCredentials') : err.message || t('auth.actionFailed'))
+      setError(formatAuthError(err, t))
     } finally {
       setLoading(false)
     }
@@ -167,5 +175,146 @@ export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) 
         </div>
       </div>
     </div>
+  )
+}
+
+interface SessionExpiredModalProps {
+  initialUsername: string
+  onSuccess: (admin: Admin) => void
+  onLogout: () => void
+}
+
+export const SessionExpiredModal: React.FC<SessionExpiredModalProps> = ({
+  initialUsername,
+  onSuccess,
+  onLogout,
+}) => {
+  const { t } = useI18n()
+  const toast = useToast()
+  const descriptionId = useId()
+  const [username, setUsername] = useState(initialUsername)
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      const res = await api.login(username.trim(), password)
+      toast.success(t('auth.reloginSuccess'))
+      onSuccess(res.admin)
+    } catch (err: any) {
+      setError(formatAuthError(err, t))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={t('auth.sessionExpiredTitle')}
+      onClose={() => {}}
+      busy={loading}
+      dismissible={false}
+      size="md"
+      descriptionId={descriptionId}
+      backdropClassName="!z-[70]"
+    >
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 space-y-5">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 shrink-0 rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400 grid place-items-center">
+            <LockKeyhole aria-hidden="true" className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              {t('auth.sessionExpiredTitle')}
+            </h2>
+            <p id={descriptionId} className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+              {t('auth.sessionExpiredSubtitle')}
+            </p>
+          </div>
+        </div>
+
+        {error && (
+          <div role="alert" className="p-3 rounded-lg bg-rose-50 dark:bg-rose-500/15 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-sm">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="reauth-username" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+              {t('auth.username')}
+            </label>
+            <input
+              id="reauth-username"
+              autoComplete="username"
+              data-autofocus={!initialUsername ? true : undefined}
+              type="text"
+              required
+              minLength={3}
+              disabled={loading}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="admin"
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="reauth-password" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+              {t('auth.password')}
+            </label>
+            <div className="relative">
+              <input
+                id="reauth-password"
+                autoComplete="current-password"
+                data-autofocus={initialUsername ? true : undefined}
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={8}
+                disabled={loading}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={t('auth.passwordPlaceholder')}
+                className="w-full pl-3 pr-11 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button
+                type="button"
+                disabled={loading}
+                aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2.5 pt-1">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={onLogout}
+              className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              {t('auth.backToLogin')}
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition"
+            >
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+              {loading ? t('auth.verifying') : t('auth.reloginSubmit')}
+              {!loading && <ArrowRight className="w-4 h-4" />}
+            </button>
+          </div>
+        </form>
+      </div>
+    </Modal>
   )
 }

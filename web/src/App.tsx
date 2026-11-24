@@ -1,12 +1,12 @@
-import React, { useEffect, useState } from 'react'
-import { api } from './api'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { api, isReauthenticating, setUnauthorizedHandler } from './api'
 import { Layout, type NavTab } from './components/Layout'
 import { LoadingState } from './components/Feedback'
 import { ToastProvider } from './components/Toast'
 import { allowNavigation } from './components/ConfirmDialog'
 import { useI18n } from './contexts/I18nContext'
 import { AuditPage } from './pages/AuditPage'
-import { AuthPage } from './pages/AuthPages'
+import { AuthPage, SessionExpiredModal } from './pages/AuthPages'
 import { ClientsPage } from './pages/ClientsPage'
 import { CronPage } from './pages/CronPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -38,6 +38,15 @@ export function App() {
   const [admin, setAdmin] = useState<Admin | null>(null)
   const [version, setVersion] = useState('dev')
   const [tab, setTab] = useState<NavTab>(initialTab())
+  const [sessionExpired, setSessionExpired] = useState(false)
+  const reauthResolversRef = useRef<((ok: boolean) => void)[]>([])
+
+  const settleReauth = useCallback((ok: boolean) => {
+    setSessionExpired(false)
+    while (reauthResolversRef.current.length > 0) {
+      reauthResolversRef.current.shift()?.(ok)
+    }
+  }, [])
 
   useEffect(() => {
     const onPopState = () => setTab(initialTab())
@@ -49,7 +58,7 @@ export function App() {
         if (st.version) setVersion(st.version)
         if (st.initialized) {
           try {
-            const me = await api.me()
+            const me = await api.me({ skipAuthPrompt: true })
             setAdmin(me.admin)
             if (me.version) setVersion(me.version)
           } catch {
@@ -64,6 +73,40 @@ export function App() {
     })()
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
+
+  const loggedIn = Boolean(admin)
+
+  useEffect(() => {
+    if (!loggedIn) {
+      setUnauthorizedHandler(null)
+      settleReauth(false)
+      return
+    }
+
+    setUnauthorizedHandler(() => new Promise<boolean>((resolve) => {
+      reauthResolversRef.current.push(resolve)
+      setSessionExpired(true)
+    }))
+
+    let lastCheckedAt = Date.now()
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible' || isReauthenticating()) return
+      const now = Date.now()
+      if (now - lastCheckedAt < 60_000) return
+      lastCheckedAt = now
+      void api.me().then((res) => {
+        if (res.admin) setAdmin(res.admin)
+        if (res.version) setVersion(res.version)
+      }).catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      setUnauthorizedHandler(null)
+      settleReauth(false)
+    }
+  }, [loggedIn, settleReauth])
 
   const navigate = async (next: NavTab) => {
     if (next === tab) return
@@ -121,8 +164,12 @@ export function App() {
         version={version}
         onLogout={async () => {
           if (!await allowNavigation()) return
-          await api.logout()
-          setAdmin(null)
+          try {
+            await api.logout()
+          } finally {
+            settleReauth(false)
+            setAdmin(null)
+          }
         }}
       >
         {tab === 'dashboard' && <DashboardPage onNavigate={navigate} />}
@@ -135,6 +182,20 @@ export function App() {
         {tab === 'migration' && <MigrationPage />}
         {tab === 'settings' && <SettingsPage />}
       </Layout>
+      {sessionExpired && (
+        <SessionExpiredModal
+          initialUsername={admin.username}
+          onSuccess={(nextAdmin) => {
+            setAdmin(nextAdmin)
+            settleReauth(true)
+          }}
+          onLogout={() => {
+            settleReauth(false)
+            void api.logout().catch(() => {})
+            setAdmin(null)
+          }}
+        />
+      )}
     </ToastProvider>
   )
 }

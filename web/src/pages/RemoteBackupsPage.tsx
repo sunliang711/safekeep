@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Copy, Loader2, Plus, RefreshCw, Server, ShieldCheck } from 'lucide-react'
-import { api, formatBytes, formatTime } from '../api'
+import { api, formatBytes, formatTime, isReauthenticating } from '../api'
 import { StatusBadge } from '../components/Badge'
 import { Modal } from '../components/Modal'
 import { RemoteRunProgress } from '../components/RemoteRunProgress'
@@ -69,7 +69,10 @@ export function RemoteBackupsPage() {
   useEffect(() => { void load() }, [])
   useEffect(() => {
     if (!jobs.some(job => job.enabled)) return
-    const timer = window.setInterval(() => { void api.listRemoteJobs().then(j => setJobs(j.items)).catch(() => {}) }, 30000)
+    const timer = window.setInterval(() => {
+      if (isReauthenticating()) return
+      void api.listRemoteJobs().then(j => setJobs(j.items)).catch(() => {})
+    }, 30000)
     return () => window.clearInterval(timer)
   }, [jobs.some(job => job.enabled)])
   useEffect(() => {

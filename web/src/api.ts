@@ -18,15 +18,52 @@ import type {
   RemoteRun,
 } from './types'
 
-async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
-    credentials: 'include',
-    ...init,
-    headers: {
-      ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
-      ...(init.headers || {}),
-    },
-  })
+type UnauthorizedHandler = () => Promise<boolean>
+
+let unauthorizedHandler: UnauthorizedHandler | null = null
+let reauthPromise: Promise<boolean> | null = null
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
+  unauthorizedHandler = handler
+}
+
+export function isReauthenticating(): boolean {
+  return reauthPromise !== null
+}
+
+async function waitForReauth(): Promise<boolean> {
+  if (!unauthorizedHandler) return false
+  if (!reauthPromise) {
+    reauthPromise = unauthorizedHandler().finally(() => {
+      reauthPromise = null
+    })
+  }
+  return reauthPromise
+}
+
+async function fetchAdmin(path: string, init: RequestInit = {}, skipAuthPrompt = false): Promise<Response> {
+  const doFetch = () =>
+    fetch(path, {
+      credentials: 'include',
+      ...init,
+      headers: {
+        ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
+        ...(init.headers || {}),
+      },
+    })
+
+  let res = await doFetch()
+  if (res.status === 401 && !skipAuthPrompt && unauthorizedHandler) {
+    const ok = await waitForReauth()
+    if (ok) {
+      res = await doFetch()
+    }
+  }
+  return res
+}
+
+async function req<T>(path: string, init: RequestInit = {}, options?: { skipAuthPrompt?: boolean }): Promise<T> {
+  const res = await fetchAdmin(path, init, options?.skipAuthPrompt)
   const text = await res.text()
   let data: any = {}
   if (text) {
@@ -44,19 +81,27 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  setupStatus: () => req<{ initialized: boolean; version?: string }>('/admin/api/v1/setup/status'),
+  setupStatus: () => req<{ initialized: boolean; version?: string }>('/admin/api/v1/setup/status', {}, { skipAuthPrompt: true }),
   setupInit: (username: string, password: string) =>
-    req<{ admin: Admin; token: string }>('/admin/api/v1/setup/init', {
-      method: 'POST',
-      body: JSON.stringify({ username, password }),
-    }),
+    req<{ admin: Admin; token: string }>(
+      '/admin/api/v1/setup/init',
+      {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      },
+      { skipAuthPrompt: true }
+    ),
   login: (username: string, password: string) =>
-    req<{ admin: Admin; token: string }>('/admin/api/v1/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ username, password }),
-    }),
-  logout: () => req('/admin/api/v1/auth/logout', { method: 'POST' }),
-  me: () => req<{ admin: Admin; version?: string }>('/admin/api/v1/auth/me'),
+    req<{ admin: Admin; token: string }>(
+      '/admin/api/v1/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      },
+      { skipAuthPrompt: true }
+    ),
+  logout: () => req('/admin/api/v1/auth/logout', { method: 'POST' }, { skipAuthPrompt: true }),
+  me: (options?: { skipAuthPrompt?: boolean }) => req<{ admin: Admin; version?: string }>('/admin/api/v1/auth/me', {}, options),
   changePassword: (old_password: string, new_password: string) =>
     req('/admin/api/v1/auth/password', {
       method: 'PUT',
@@ -190,10 +235,8 @@ export const api = {
     include_audit_logs: boolean
     passphrase: string
   }) => {
-    const res = await fetch('/admin/api/v1/migration/export', {
+    const res = await fetchAdmin('/admin/api/v1/migration/export', {
       method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
     if (!res.ok) {

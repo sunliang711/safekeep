@@ -145,6 +145,11 @@ export const en: Record<TranslationKey, string> = {
   'auth.setupSubmit': 'Create Account & Start',
   'auth.loginSubmit': 'Sign In',
   'auth.securityNote': 'Encrypted credential storage · Authorized administrators only',
+  'auth.sessionExpiredTitle': 'Session Expired',
+  'auth.sessionExpiredSubtitle': 'Your session has expired. Sign in again to continue without losing your current page state.',
+  'auth.reloginSubmit': 'Sign In Again',
+  'auth.backToLogin': 'Sign Out',
+  'auth.reloginSuccess': 'Session restored',
 
   // Dashboard
   'dashboard.title': 'Dashboard',

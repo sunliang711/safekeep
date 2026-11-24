@@ -13,9 +13,10 @@ interface Props {
   children: React.ReactNode
   role?: 'dialog' | 'alertdialog'
   descriptionId?: string
+  backdropClassName?: string
 }
 
-export function Modal({ title, onClose, busy = false, dismissible = true, size = 'lg', children, role = 'dialog', descriptionId }: Props) {
+export function Modal({ title, onClose, busy = false, dismissible = true, size = 'lg', children, role = 'dialog', descriptionId, backdropClassName = '' }: Props) {
   const { t } = useI18n()
   const root = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
@@ -28,7 +29,9 @@ export function Modal({ title, onClose, busy = false, dismissible = true, size =
     const focusable = () => Array.from(root.current?.querySelectorAll<HTMLElement>(
       'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]'
     ) || []).filter((el) => el.getClientRects().length > 0)
-    const first = root.current?.querySelector<HTMLElement>('[data-autofocus], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)')
+    const first =
+      root.current?.querySelector<HTMLElement>('[data-autofocus]') ||
+      root.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)')
     ;(first || focusable()[0] || root.current)?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isTopDialog(root.current)) return
@@ -62,7 +65,7 @@ export function Modal({ title, onClose, busy = false, dismissible = true, size =
   }, [])
 
   return createPortal(
-    <div className="modal-backdrop">
+    <div className={`modal-backdrop ${backdropClassName}`.trim()}>
       <div ref={root} role={role} aria-modal="true" aria-label={title} aria-describedby={descriptionId} aria-busy={busy} tabIndex={-1} className={`modal-container ${size === 'md' ? 'max-w-md' : size === 'xl' ? 'max-w-3xl' : 'max-w-2xl'}`}>
         {dismissible && <button type="button" onClick={onClose} disabled={busy} aria-label={t('common.closeModal')} className="modal-close"><X className="w-4 h-4" /></button>}
         {children}
