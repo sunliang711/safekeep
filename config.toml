@@ -8,6 +8,8 @@ listen = ":8333"
 data_dir = "./data"
 # 可选：32 字节加密主密钥（64 位十六进制或 Base64）；留空则自动在 data_dir 下生成 master.key
 master_key = ""
+# 可选：启动时重置主管理员密码为一次性随机临时密码并强制首次登录后改密（也可通过 RESET_ADMIN=true 环境变量启用）
+reset_admin = false
 # 可选：允许跨域访问管理端或 API 的前端 Origin 白名单
 cors_allowed_origins = []
 

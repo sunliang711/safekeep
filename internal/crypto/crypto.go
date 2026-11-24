@@ -202,6 +202,23 @@ func SignWebhook(secret string, payload []byte) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
+// GenerateTempPassword generates a high-entropy temporary admin password with an unambiguous alphabet.
+func GenerateTempPassword(length int) (string, error) {
+	if length < 8 {
+		length = 20
+	}
+	const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+		return "", err
+	}
+	out := make([]byte, length)
+	for i := range buf {
+		out[i] = alphabet[int(buf[i])%len(alphabet)]
+	}
+	return "adm_" + string(out), nil
+}
+
 // RandomToken returns a URL-safe random hex token of n bytes.
 func RandomToken(nBytes int) (string, error) {
 	buf := make([]byte, nBytes)

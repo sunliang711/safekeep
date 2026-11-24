@@ -6,7 +6,7 @@ import { ToastProvider } from './components/Toast'
 import { allowNavigation } from './components/ConfirmDialog'
 import { useI18n } from './contexts/I18nContext'
 import { AuditPage } from './pages/AuditPage'
-import { AuthPage, SessionExpiredModal } from './pages/AuthPages'
+import { AuthPage, ForcePasswordChangePage, SessionExpiredModal } from './pages/AuthPages'
 import { ClientsPage } from './pages/ClientsPage'
 import { CronPage } from './pages/CronPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -37,6 +37,7 @@ export function App() {
   const [initialized, setInitialized] = useState(true)
   const [admin, setAdmin] = useState<Admin | null>(null)
   const [version, setVersion] = useState('dev')
+  const [resetAdminEnvActive, setResetAdminEnvActive] = useState(false)
   const [tab, setTab] = useState<NavTab>(initialTab())
   const [sessionExpired, setSessionExpired] = useState(false)
   const reauthResolversRef = useRef<((ok: boolean) => void)[]>([])
@@ -56,11 +57,17 @@ export function App() {
         const st = await api.setupStatus()
         setInitialized(st.initialized)
         if (st.version) setVersion(st.version)
+        if (typeof st.reset_admin_env_active === 'boolean') {
+          setResetAdminEnvActive(st.reset_admin_env_active)
+        }
         if (st.initialized) {
           try {
             const me = await api.me({ skipAuthPrompt: true })
             setAdmin(me.admin)
             if (me.version) setVersion(me.version)
+            if (typeof me.reset_admin_env_active === 'boolean') {
+              setResetAdminEnvActive(me.reset_admin_env_active)
+            }
           } catch {
             setAdmin(null)
           }
@@ -97,6 +104,9 @@ export function App() {
       void api.me().then((res) => {
         if (res.admin) setAdmin(res.admin)
         if (res.version) setVersion(res.version)
+        if (typeof res.reset_admin_env_active === 'boolean') {
+          setResetAdminEnvActive(res.reset_admin_env_active)
+        }
       }).catch(() => {})
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
@@ -143,16 +153,50 @@ export function App() {
       <AuthPage
         mode="setup"
         version={version}
-        onSuccess={(a) => {
+        resetAdminEnvActive={resetAdminEnvActive}
+        onSuccess={(a, envActive) => {
           setInitialized(true)
           setAdmin(a)
+          if (typeof envActive === 'boolean') setResetAdminEnvActive(envActive)
         }}
       />
     )
   }
 
   if (!admin) {
-    return <AuthPage mode="login" version={version} onSuccess={(a) => setAdmin(a)} />
+    return (
+      <AuthPage
+        mode="login"
+        version={version}
+        resetAdminEnvActive={resetAdminEnvActive}
+        onSuccess={(a, envActive) => {
+          setAdmin(a)
+          if (typeof envActive === 'boolean') setResetAdminEnvActive(envActive)
+        }}
+      />
+    )
+  }
+
+  if (admin.must_change_password) {
+    return (
+      <ForcePasswordChangePage
+        admin={admin}
+        version={version}
+        resetAdminEnvActive={resetAdminEnvActive}
+        onSuccess={(nextAdmin, envActive) => {
+          setAdmin(nextAdmin)
+          if (typeof envActive === 'boolean') setResetAdminEnvActive(envActive)
+        }}
+        onLogout={async () => {
+          try {
+            await api.logout()
+          } finally {
+            settleReauth(false)
+            setAdmin(null)
+          }
+        }}
+      />
+    )
   }
 
   return (
@@ -162,6 +206,7 @@ export function App() {
         onNavigate={navigate}
         admin={admin}
         version={version}
+        resetAdminEnvActive={resetAdminEnvActive}
         onLogout={async () => {
           if (!await allowNavigation()) return
           try {
@@ -185,9 +230,10 @@ export function App() {
       {sessionExpired && (
         <SessionExpiredModal
           initialUsername={admin.username}
-          onSuccess={(nextAdmin) => {
+          onSuccess={(nextAdmin, envActive) => {
+            if (typeof envActive === 'boolean') setResetAdminEnvActive(envActive)
             setAdmin(nextAdmin)
-            settleReauth(true)
+            settleReauth(!nextAdmin.must_change_password)
           }}
           onLogout={() => {
             settleReauth(false)

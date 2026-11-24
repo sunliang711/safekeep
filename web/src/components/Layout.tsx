@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useI18n } from '../contexts/I18nContext'
 import type { TranslationKey } from '../i18n/zh'
+import { ResetAdminBanner } from '../pages/AuthPages'
 import { PreferenceControls } from './PreferenceControls'
 import type { Admin } from '../types'
 
@@ -27,6 +28,7 @@ interface Props {
   onNavigate: (tab: NavTab) => void
   admin: Admin
   version?: string
+  resetAdminEnvActive?: boolean
   onLogout: () => void
   children: React.ReactNode
 }
@@ -43,7 +45,15 @@ const navItems: { id: NavTab; labelKey: TranslationKey; icon: React.ReactNode }[
   { id: 'settings', labelKey: 'nav.settings', icon: <Settings className="w-4 h-4" /> },
 ]
 
-export const Layout: React.FC<Props> = ({ active, onNavigate, admin, version = 'dev', onLogout, children }) => {
+export const Layout: React.FC<Props> = ({
+  active,
+  onNavigate,
+  admin,
+  version = 'dev',
+  resetAdminEnvActive = false,
+  onLogout,
+  children,
+}) => {
   const { t } = useI18n()
   const [menuOpen, setMenuOpen] = useState(false)
   const navigation = useRef<HTMLElement>(null)
@@ -178,7 +188,14 @@ export const Layout: React.FC<Props> = ({ active, onNavigate, admin, version = '
           </div>
         </header>
         <main id="main-content" tabIndex={-1} className="min-w-0">
-          <div className="page-content max-w-[1440px] mx-auto px-4 py-6 sm:p-8">{children}</div>
+          <div className="page-content max-w-[1440px] mx-auto px-4 py-6 sm:p-8">
+            {resetAdminEnvActive && (
+              <div className="mb-6">
+                <ResetAdminBanner />
+              </div>
+            )}
+            {children}
+          </div>
           <footer className="px-8 py-6 text-[11px] text-slate-400 dark:text-slate-500 flex flex-wrap gap-2 justify-between">
             <span>{t('app.footerLeft', { version: versionLabel })}</span>
             <span>{t('app.footerRight')}</span>

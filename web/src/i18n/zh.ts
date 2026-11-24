@@ -148,6 +148,14 @@ export const zh = {
   'auth.reloginSubmit': '重新登录',
   'auth.backToLogin': '退出到登录页',
   'auth.reloginSuccess': '登录已恢复',
+  'auth.forgotPasswordTitle': '忘记密码？',
+  'auth.forgotPasswordDesc': '请在服务端设置环境变量 RESET_ADMIN=true 后重启 SafeKeep，并使用服务启动日志中打印的临时密码登录。',
+  'auth.forceResetTitle': '设置新的管理员密码',
+  'auth.forceResetSubtitle': '当前账号「{username}」正在使用 RESET_ADMIN 生成的临时密码。请立即设置新密码以激活控制台。',
+  'auth.newPassword': '新密码',
+  'auth.forceResetSubmit': '保存新密码并进入控制台',
+  'auth.forceResetSuccess': '管理员密码已更新',
+  'auth.resetAdminBanner': '检测到服务端当前启用了 RESET_ADMIN（或 config.toml 中 reset_admin = true）。完成密码设置后，请移除该环境变量或改回 false，以免下次服务重启时再次重置密码。',
 
   // Dashboard
   'dashboard.title': '概览仪表盘',
@@ -662,6 +670,7 @@ export const zh = {
   'audit.action.migration.export': '导出环境迁移包',
   'audit.action.migration.import': '导入恢复环境',
   'audit.action.system.setup_init': '初始化首个管理员',
+  'audit.action.system.reset_admin': '启动重置管理员密码 (RESET_ADMIN)',
   'audit.action.admin.login': '登录控制台',
   'audit.action.admin.change_password': '修改登录密码',
   'audit.action.admin.create': '新增管理员账号',

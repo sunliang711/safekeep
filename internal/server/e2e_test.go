@@ -45,14 +45,16 @@ import (
 )
 
 type testEnv struct {
-	srv     *httptest.Server
-	store   *db.Store
-	cipher  *crypto.Cipher
-	migSvc  *migration.Service
-	pool    *queue.WorkerPool
-	sched   *scheduler.Engine
-	cancel  context.CancelFunc
-	cookies []*http.Cookie
+	srv      *httptest.Server
+	server   *Server
+	store    *db.Store
+	cipher   *crypto.Cipher
+	migSvc   *migration.Service
+	auditLog *audit.Logger
+	pool     *queue.WorkerPool
+	sched    *scheduler.Engine
+	cancel   context.CancelFunc
+	cookies  []*http.Cookie
 }
 
 func setupTestEnv(t *testing.T) *testEnv {
@@ -118,7 +120,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		_ = store.Close()
 	})
 
-	return &testEnv{srv: ts, store: store, cipher: cipher, migSvc: migSvc, pool: pool, sched: sched, cancel: cancel}
+	return &testEnv{srv: ts, server: s, store: store, cipher: cipher, migSvc: migSvc, auditLog: auditLog, pool: pool, sched: sched, cancel: cancel}
 }
 
 func (e *testEnv) adminReq(t *testing.T, method, path string, body any) *http.Response {

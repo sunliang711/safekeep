@@ -78,6 +78,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			username TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL,
 			is_active INTEGER NOT NULL DEFAULT 1,
+			must_change_password INTEGER NOT NULL DEFAULT 0,
 			last_login_at DATETIME,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
@@ -257,6 +258,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if err := s.migrateRemoteBackups(ctx); err != nil {
 		return err
+	}
+	if err := s.ensureColumn(ctx, "admins", "must_change_password", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("ensure admins.must_change_password: %w", err)
 	}
 	if err := s.ensureColumn(ctx, "clients", "key_encrypted", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensure clients.key_encrypted: %w", err)

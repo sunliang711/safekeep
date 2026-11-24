@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,13 +29,63 @@ import (
 
 // --- Setup & Auth ---
 
+// BootstrapResetAdmin resets the primary admin account (preferring username "admin",
+// otherwise the earliest created admin) or creates an initial "admin" account if none exists.
+// It prints the generated one-time temporary password to out and records an audit event.
+func BootstrapResetAdmin(ctx context.Context, store *db.Store, auditLog *audit.Logger, out io.Writer) (*db.Admin, string, error) {
+	if out == nil {
+		out = os.Stdout
+	}
+	tempPass, err := crypto.GenerateTempPassword(20)
+	if err != nil {
+		return nil, "", fmt.Errorf("generate temporary admin password: %w", err)
+	}
+	hash, err := crypto.HashPassword(tempPass)
+	if err != nil {
+		return nil, "", fmt.Errorf("hash temporary admin password: %w", err)
+	}
+	admin, created, err := store.ResetOrCreateBootstrapAdmin(ctx, crypto.NewULID(), hash)
+	if err != nil {
+		return nil, "", fmt.Errorf("reset bootstrap admin: %w", err)
+	}
+	if auditLog != nil {
+		auditLog.Record(ctx, audit.Event{
+			ActorType:    "system",
+			ActorID:      "bootstrap",
+			ActorName:    "reset_admin",
+			Action:       "system.reset_admin",
+			ResourceType: "admin",
+			ResourceID:   admin.ID,
+			Detail: map[string]any{
+				"username": admin.Username,
+				"created":  created,
+			},
+		})
+	}
+	reason := "Admin Password Reset (RESET_ADMIN set)"
+	if created {
+		reason = "Initial Admin Created (RESET_ADMIN set)"
+	}
+	fmt.Fprintf(out, "\n========================================================================\n")
+	fmt.Fprintf(out, "  SafeKeep - Web UI Admin Credentials (%s)\n", reason)
+	fmt.Fprintf(out, "  Username           : %s\n", admin.Username)
+	fmt.Fprintf(out, "  Temporary Password : %s\n", tempPass)
+	fmt.Fprintf(out, "  Action Required    : Sign in to the Web UI and set a new password.\n")
+	fmt.Fprintf(out, "========================================================================\n\n")
+	return admin, tempPass, nil
+}
+
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	n, err := s.store.CountAdmins(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"initialized": n > 0, "version": s.version})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"initialized":            n > 0,
+		"version":                s.version,
+		"reset_admin_env_active": s.resetAdminEnvActive,
+	})
 }
 
 func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +200,11 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("管理员已登录控制台：\n\n- 管理员: %s (%s)\n- 来源 IP: %s\n- User-Agent: %s\n- 时间: %s\n", admin.Username, admin.ID, clientIP(r), r.UserAgent(), time.Now().Format(time.RFC3339)),
 		func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
 	)
-	writeJSON(w, http.StatusOK, map[string]any{"admin": admin, "token": tok})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"admin":                  admin,
+		"token":                  tok,
+		"reset_admin_env_active": s.resetAdminEnvActive,
+	})
 }
 
 func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +221,11 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"admin": currentAdmin(r), "version": s.version})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"admin":                  currentAdmin(r),
+		"version":                s.version,
+		"reset_admin_env_active": s.resetAdminEnvActive,
+	})
 }
 
 func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -179,12 +238,18 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	if !crypto.VerifyPassword(admin.PasswordHash, req.OldPassword) {
-		writeError(w, http.StatusBadRequest, "invalid_password", "current password is incorrect")
-		return
+	if !admin.MustChangePassword || req.OldPassword != "" {
+		if !crypto.VerifyPassword(admin.PasswordHash, req.OldPassword) {
+			writeError(w, http.StatusBadRequest, "invalid_password", "current password is incorrect")
+			return
+		}
 	}
 	if len(req.NewPassword) < 8 {
 		writeError(w, http.StatusBadRequest, "weak_password", "new password must be at least 8 characters")
+		return
+	}
+	if len(req.NewPassword) > 72 {
+		writeError(w, http.StatusBadRequest, "weak_password", "new password must not exceed 72 characters")
 		return
 	}
 	hash, err := crypto.HashPassword(req.NewPassword)
@@ -197,6 +262,7 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	admin.PasswordHash = hash
+	admin.MustChangePassword = false
 	if tok, err := s.signAdminToken(admin); err == nil {
 		s.setAdminCookie(w, r, tok)
 	}
@@ -218,7 +284,11 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 		fmt.Sprintf("管理员修改了自己的登录密码：\n\n- 管理员: %s (%s)\n- 来源 IP: %s\n- 时间: %s\n", admin.Username, admin.ID, clientIP(r), time.Now().Format(time.RFC3339)),
 		func(rules notify.NotifyRules) bool { return rules.AdminSecurity },
 	)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                 "ok",
+		"admin":                  admin,
+		"reset_admin_env_active": s.resetAdminEnvActive,
+	})
 }
 
 func isHTTPS(r *http.Request) bool {

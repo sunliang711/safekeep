@@ -25,6 +25,7 @@ type BootstrapConfig struct {
 	ListenAddr         string
 	DataDir            string
 	MasterKeyHex       string
+	ResetAdmin         bool
 	CORSAllowedOrigins []string
 	Defaults           SystemSettings
 	SMTPDefaults       notify.SMTPConfig
@@ -37,6 +38,7 @@ type FileConfig struct {
 		Listen             string   `toml:"listen"`
 		DataDir            string   `toml:"data_dir"`
 		MasterKey          string   `toml:"master_key"`
+		ResetAdmin         bool     `toml:"reset_admin"`
 		CORSAllowedOrigins []string `toml:"cors_allowed_origins"`
 	} `toml:"server"`
 	Defaults struct {
@@ -115,6 +117,7 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 	if strings.TrimSpace(fc.Server.MasterKey) != "" {
 		boot.MasterKeyHex = strings.TrimSpace(fc.Server.MasterKey)
 	}
+	boot.ResetAdmin = fc.Server.ResetAdmin
 	if len(fc.Server.CORSAllowedOrigins) > 0 {
 		boot.CORSAllowedOrigins = append(boot.CORSAllowedOrigins, fc.Server.CORSAllowedOrigins...)
 	}
@@ -128,6 +131,13 @@ func Load(explicitConfigPath string, cliOverrides map[string]string) (BootstrapC
 	}
 	if v, ok := os.LookupEnv("SAFEKEEP_MASTER_KEY"); ok && strings.TrimSpace(v) != "" {
 		boot.MasterKeyHex = strings.TrimSpace(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("SAFEKEEP_RESET_ADMIN")); v != "" {
+		boot.ResetAdmin = !strings.EqualFold(v, "false") && v != "0"
+	} else if v := strings.TrimSpace(os.Getenv("RESET_ADMIN")); v != "" {
+		boot.ResetAdmin = !strings.EqualFold(v, "false") && v != "0"
+	} else if v := strings.TrimSpace(os.Getenv("reset_admin")); v != "" {
+		boot.ResetAdmin = !strings.EqualFold(v, "false") && v != "0"
 	}
 	if v, ok := os.LookupEnv("SAFEKEEP_CORS_ORIGINS"); ok {
 		boot.CORSAllowedOrigins = parseCSV(v)

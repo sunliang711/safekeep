@@ -79,3 +79,49 @@ func TestDefaultPortIs8333(t *testing.T) {
 		t.Fatalf("expected default daily_traffic_limit_bytes=1GiB, got %d", boot.Defaults.DailyTrafficLimitBytes)
 	}
 }
+
+func TestLoadResetAdmin(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgFile, []byte("[server]\nreset_admin = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	boot, err := Load(cfgFile, nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !boot.ResetAdmin {
+		t.Fatalf("expected reset_admin=true from config.toml")
+	}
+
+	// RESET_ADMIN=false overrides config.toml reset_admin=true
+	t.Setenv("RESET_ADMIN", "false")
+	boot, err = Load(cfgFile, nil)
+	if err != nil {
+		t.Fatalf("Load with RESET_ADMIN=false: %v", err)
+	}
+	if boot.ResetAdmin {
+		t.Fatalf("expected RESET_ADMIN=false to override config.toml")
+	}
+
+	// RESET_ADMIN=true enables reset_admin without config.toml setting
+	t.Setenv("RESET_ADMIN", "true")
+	boot, err = Load("", nil)
+	if err != nil {
+		t.Fatalf("Load with RESET_ADMIN=true: %v", err)
+	}
+	if !boot.ResetAdmin {
+		t.Fatalf("expected RESET_ADMIN=true to enable reset_admin")
+	}
+
+	// SAFEKEEP_RESET_ADMIN takes precedence over RESET_ADMIN
+	t.Setenv("SAFEKEEP_RESET_ADMIN", "0")
+	boot, err = Load("", nil)
+	if err != nil {
+		t.Fatalf("Load with SAFEKEEP_RESET_ADMIN=0: %v", err)
+	}
+	if boot.ResetAdmin {
+		t.Fatalf("expected SAFEKEEP_RESET_ADMIN=0 to disable reset_admin")
+	}
+}

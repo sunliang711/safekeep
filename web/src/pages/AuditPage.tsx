@@ -52,6 +52,7 @@ const ACTION_KEYS: Record<string, TranslationKey> = {
   'migration.export': 'audit.action.migration.export',
   'migration.import': 'audit.action.migration.import',
   'system.setup_init': 'audit.action.system.setup_init',
+  'system.reset_admin': 'audit.action.system.reset_admin',
   'admin.login': 'audit.action.admin.login',
   'admin.change_password': 'audit.action.admin.change_password',
   'admin.create': 'audit.action.admin.create',
@@ -129,7 +130,7 @@ const ACTION_GROUPS: { labelKey: TranslationKey; actions: string[] }[] = [
   },
   {
     labelKey: 'audit.actionGroup.account',
-    actions: ['system.setup_init', 'admin.login', 'admin.change_password', 'admin.create', 'admin.update'],
+    actions: ['system.setup_init', 'system.reset_admin', 'admin.login', 'admin.change_password', 'admin.create', 'admin.update'],
   },
   {
     labelKey: 'audit.actionGroup.alert',

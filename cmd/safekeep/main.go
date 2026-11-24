@@ -117,6 +117,12 @@ func main() {
 	registry.RegisterBuilder("dropbox", dropbox.Builder)
 
 	auditLog := audit.NewLogger(store)
+	if boot.ResetAdmin {
+		if _, _, err := server.BootstrapResetAdmin(appCtx, store, auditLog, os.Stdout); err != nil {
+			logger.Error("reset admin password failed", "err", err)
+			os.Exit(1)
+		}
+	}
 	notifier := notify.NewDispatcher(appCtx,
 		func(ctx context.Context) (notify.SMTPConfig, error) {
 			return store.GetSMTPConfig(ctx, cipher)
@@ -163,6 +169,7 @@ func main() {
 	srv.SetNotifier(notifier)
 	srv.SetVersion(version)
 	srv.SetCORSOrigins(boot.CORSAllowedOrigins)
+	srv.SetResetAdminEnvActive(boot.ResetAdmin)
 	httpSrv := &http.Server{
 		Addr:              boot.ListenAddr,
 		Handler:           srv.Router(),

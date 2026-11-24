@@ -55,8 +55,9 @@ type Server struct {
 	notifier    *notify.Dispatcher
 	logger      *slog.Logger
 	webFS       fs.FS
-	version     string
-	corsOrigins []string
+	version             string
+	corsOrigins         []string
+	resetAdminEnvActive bool
 
 	rateMu      sync.Mutex
 	rateBuckets map[string]*rateWindow
@@ -114,6 +115,11 @@ func (s *Server) SetVersion(v string) {
 	if strings.TrimSpace(v) != "" {
 		s.version = strings.TrimSpace(v)
 	}
+}
+
+// SetResetAdminEnvActive marks whether RESET_ADMIN was active during server bootstrap.
+func (s *Server) SetResetAdminEnvActive(active bool) {
+	s.resetAdminEnvActive = active
 }
 
 // SetNotifier configures the shared email notification dispatcher.
@@ -191,61 +197,65 @@ func (s *Server) Router() http.Handler {
 			r.Get("/auth/me", s.handleAdminMe)
 			r.Put("/auth/password", s.handleAdminChangePassword)
 
-			r.Get("/dashboard/summary", s.handleDashboardSummary)
-			s.registerRemoteRoutes(r)
+			r.Group(func(r chi.Router) {
+				r.Use(s.requirePasswordChangedMiddleware)
 
-			r.Get("/proxies", s.handleListProxies)
-			r.Post("/proxies", s.handleSaveProxy)
-			r.Put("/proxies/{id}", s.handleSaveProxy)
-			r.Delete("/proxies/{id}", s.handleDeleteProxy)
-			r.Get("/proxies/{id}/secrets", s.handleRevealProxySecrets)
-			r.Get("/upstreams", s.handleListUpstreams)
-			r.Post("/upstreams", s.handleCreateUpstream)
-			r.Post("/upstreams/test-proxy", s.handleTestUpstreamProxy)
-			r.Get("/upstreams/{id}/secrets", s.handleRevealUpstreamSecrets)
-			r.Put("/upstreams/{id}", s.handleUpdateUpstream)
-			r.Delete("/upstreams/{id}", s.handleDeleteUpstream)
-			r.Post("/upstreams/{id}/test", s.handleTestUpstream)
-			r.Get("/upstreams/{id}/oauth/dropbox/start", s.handleDropboxOAuthStart)
+				r.Get("/dashboard/summary", s.handleDashboardSummary)
+				s.registerRemoteRoutes(r)
 
-			r.Get("/clients", s.handleListClients)
-			r.Post("/clients", s.handleCreateClient)
-			r.Get("/clients/{id}/secrets", s.handleRevealClientSecrets)
-			r.Put("/clients/{id}", s.handleUpdateClient)
-			r.Delete("/clients/{id}", s.handleDeleteClient)
-			r.Post("/clients/{id}/rotate-key", s.handleRotateClientKey)
-			r.Put("/clients/{id}/upstreams", s.handleSetClientUpstreams)
+				r.Get("/proxies", s.handleListProxies)
+				r.Post("/proxies", s.handleSaveProxy)
+				r.Put("/proxies/{id}", s.handleSaveProxy)
+				r.Delete("/proxies/{id}", s.handleDeleteProxy)
+				r.Get("/proxies/{id}/secrets", s.handleRevealProxySecrets)
+				r.Get("/upstreams", s.handleListUpstreams)
+				r.Post("/upstreams", s.handleCreateUpstream)
+				r.Post("/upstreams/test-proxy", s.handleTestUpstreamProxy)
+				r.Get("/upstreams/{id}/secrets", s.handleRevealUpstreamSecrets)
+				r.Put("/upstreams/{id}", s.handleUpdateUpstream)
+				r.Delete("/upstreams/{id}", s.handleDeleteUpstream)
+				r.Post("/upstreams/{id}/test", s.handleTestUpstream)
+				r.Get("/upstreams/{id}/oauth/dropbox/start", s.handleDropboxOAuthStart)
 
-			r.Get("/tasks", s.handleAdminListTasks)
-			r.Post("/backups/upload", s.handleAdminUploadBackup)
-			r.Get("/tasks/{id}", s.handleAdminGetTask)
-			r.Post("/tasks/{id}/retry", s.handleAdminRetryTask)
-			r.Get("/tasks/{id}/download", s.handleAdminDownloadTask)
+				r.Get("/clients", s.handleListClients)
+				r.Post("/clients", s.handleCreateClient)
+				r.Get("/clients/{id}/secrets", s.handleRevealClientSecrets)
+				r.Put("/clients/{id}", s.handleUpdateClient)
+				r.Delete("/clients/{id}", s.handleDeleteClient)
+				r.Post("/clients/{id}/rotate-key", s.handleRotateClientKey)
+				r.Put("/clients/{id}/upstreams", s.handleSetClientUpstreams)
 
-			r.Get("/cron-jobs", s.handleListCronJobs)
-			r.Post("/cron-jobs/preview", s.handlePreviewCronSchedule)
-			r.Get("/cron-jobs/{id}/secrets", s.handleRevealCronJobSecrets)
-			r.Put("/cron-jobs/{id}", s.handleUpdateCronJob)
-			r.Post("/cron-jobs/{id}/run", s.handleRunCronJob)
-			r.Get("/cron-jobs/{id}/runs", s.handleListCronJobRuns)
+				r.Get("/tasks", s.handleAdminListTasks)
+				r.Post("/backups/upload", s.handleAdminUploadBackup)
+				r.Get("/tasks/{id}", s.handleAdminGetTask)
+				r.Post("/tasks/{id}/retry", s.handleAdminRetryTask)
+				r.Get("/tasks/{id}/download", s.handleAdminDownloadTask)
 
-			r.Get("/audit-logs", s.handleListAuditLogs)
-			r.Get("/audit-logs/export", s.handleExportAuditLogs)
+				r.Get("/cron-jobs", s.handleListCronJobs)
+				r.Post("/cron-jobs/preview", s.handlePreviewCronSchedule)
+				r.Get("/cron-jobs/{id}/secrets", s.handleRevealCronJobSecrets)
+				r.Put("/cron-jobs/{id}", s.handleUpdateCronJob)
+				r.Post("/cron-jobs/{id}/run", s.handleRunCronJob)
+				r.Get("/cron-jobs/{id}/runs", s.handleListCronJobRuns)
 
-			r.Get("/settings", s.handleGetSettings)
-			r.Put("/settings", s.handleUpdateSettings)
-			r.Get("/settings/smtp", s.handleGetSMTPSettings)
-			r.Put("/settings/smtp", s.handleUpdateSMTPSettings)
-			r.Post("/settings/smtp/test", s.handleTestSMTPSettings)
-			r.Post("/circuit-breaker/reset", s.handleResetCircuitBreaker)
+				r.Get("/audit-logs", s.handleListAuditLogs)
+				r.Get("/audit-logs/export", s.handleExportAuditLogs)
 
-			r.Get("/admins", s.handleListAdmins)
-			r.Post("/admins", s.handleCreateAdmin)
-			r.Put("/admins/{id}", s.handleUpdateAdmin)
+				r.Get("/settings", s.handleGetSettings)
+				r.Put("/settings", s.handleUpdateSettings)
+				r.Get("/settings/smtp", s.handleGetSMTPSettings)
+				r.Put("/settings/smtp", s.handleUpdateSMTPSettings)
+				r.Post("/settings/smtp/test", s.handleTestSMTPSettings)
+				r.Post("/circuit-breaker/reset", s.handleResetCircuitBreaker)
 
-			r.Post("/migration/export", s.handleMigrationExport)
-			r.Post("/migration/inspect", s.handleMigrationInspect)
-			r.Post("/migration/import", s.handleMigrationImport)
+				r.Get("/admins", s.handleListAdmins)
+				r.Post("/admins", s.handleCreateAdmin)
+				r.Put("/admins/{id}", s.handleUpdateAdmin)
+
+				r.Post("/migration/export", s.handleMigrationExport)
+				r.Post("/migration/inspect", s.handleMigrationInspect)
+				r.Post("/migration/import", s.handleMigrationImport)
+			})
 		})
 	})
 
@@ -432,6 +442,16 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), ctxAdminKey, admin)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) requirePasswordChangedMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if admin := currentAdmin(r); admin != nil && admin.MustChangePassword {
+			writeError(w, http.StatusForbidden, "password_change_required", "admin password change required before accessing management console")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

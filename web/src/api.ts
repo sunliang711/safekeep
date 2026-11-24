@@ -81,7 +81,12 @@ async function req<T>(path: string, init: RequestInit = {}, options?: { skipAuth
 }
 
 export const api = {
-  setupStatus: () => req<{ initialized: boolean; version?: string }>('/admin/api/v1/setup/status', {}, { skipAuthPrompt: true }),
+  setupStatus: () =>
+    req<{ initialized: boolean; version?: string; reset_admin_env_active?: boolean }>(
+      '/admin/api/v1/setup/status',
+      {},
+      { skipAuthPrompt: true }
+    ),
   setupInit: (username: string, password: string) =>
     req<{ admin: Admin; token: string }>(
       '/admin/api/v1/setup/init',
@@ -92,7 +97,7 @@ export const api = {
       { skipAuthPrompt: true }
     ),
   login: (username: string, password: string) =>
-    req<{ admin: Admin; token: string }>(
+    req<{ admin: Admin; token: string; reset_admin_env_active?: boolean }>(
       '/admin/api/v1/auth/login',
       {
         method: 'POST',
@@ -101,9 +106,10 @@ export const api = {
       { skipAuthPrompt: true }
     ),
   logout: () => req('/admin/api/v1/auth/logout', { method: 'POST' }, { skipAuthPrompt: true }),
-  me: (options?: { skipAuthPrompt?: boolean }) => req<{ admin: Admin; version?: string }>('/admin/api/v1/auth/me', {}, options),
+  me: (options?: { skipAuthPrompt?: boolean }) =>
+    req<{ admin: Admin; version?: string; reset_admin_env_active?: boolean }>('/admin/api/v1/auth/me', {}, options),
   changePassword: (old_password: string, new_password: string) =>
-    req('/admin/api/v1/auth/password', {
+    req<{ status: string; admin?: Admin; reset_admin_env_active?: boolean }>('/admin/api/v1/auth/password', {
       method: 'PUT',
       body: JSON.stringify({ old_password, new_password }),
     }),

@@ -1,11 +1,24 @@
 import React, { useId, useState } from 'react'
-import { ArrowRight, Cloud, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Cloud, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { api } from '../api'
 import { Modal } from '../components/Modal'
 import { PreferenceControls } from '../components/PreferenceControls'
 import { useToast } from '../components/Toast'
 import { useI18n } from '../contexts/I18nContext'
 import type { Admin } from '../types'
+
+export const ResetAdminBanner: React.FC = () => {
+  const { t } = useI18n()
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2.5 rounded-xl border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 px-4 py-3 text-xs leading-5 text-amber-900 dark:text-amber-200"
+    >
+      <AlertTriangle aria-hidden="true" className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+      <span>{t('auth.resetAdminBanner')}</span>
+    </div>
+  )
+}
 
 function formatAuthError(err: any, t: ReturnType<typeof useI18n>['t']): string {
   return err?.message === 'invalid username or password'
@@ -16,10 +29,11 @@ function formatAuthError(err: any, t: ReturnType<typeof useI18n>['t']): string {
 interface Props {
   mode: 'setup' | 'login'
   version?: string
-  onSuccess: (admin: Admin) => void
+  resetAdminEnvActive?: boolean
+  onSuccess: (admin: Admin, resetAdminEnvActive?: boolean) => void
 }
 
-export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) => {
+export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', resetAdminEnvActive = false, onSuccess }) => {
   const { t } = useI18n()
   const versionLabel = version && version !== 'dev' && !version.startsWith('v') ? `v${version}` : version || 'dev'
   const [username, setUsername] = useState('')
@@ -38,9 +52,13 @@ export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) 
     }
     setLoading(true)
     try {
-      const res =
-        mode === 'setup' ? await api.setupInit(username, password) : await api.login(username, password)
-      onSuccess(res.admin)
+      if (mode === 'setup') {
+        const res = await api.setupInit(username, password)
+        onSuccess(res.admin, resetAdminEnvActive)
+      } else {
+        const res = await api.login(username, password)
+        onSuccess(res.admin, res.reset_admin_env_active)
+      }
     } catch (err: any) {
       setError(formatAuthError(err, t))
     } finally {
@@ -89,6 +107,12 @@ export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) 
               </p>
             </div>
           </div>
+
+          {mode === 'login' && resetAdminEnvActive && (
+            <div className="mb-4">
+              <ResetAdminBanner />
+            </div>
+          )}
 
           {error && (
             <div role="alert" className="mb-4 p-3 rounded-lg bg-rose-50 dark:bg-rose-500/15 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-sm">
@@ -168,6 +192,17 @@ export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) 
               {!loading && <ArrowRight className="w-4 h-4" />}
             </button>
           </form>
+
+          {mode === 'login' && (
+            <details className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+              <summary className="cursor-pointer select-none hover:text-indigo-600 dark:hover:text-indigo-400 font-medium">
+                {t('auth.forgotPasswordTitle')}
+              </summary>
+              <p className="mt-2 leading-5 text-slate-500 dark:text-slate-400">
+                {t('auth.forgotPasswordDesc')}
+              </p>
+            </details>
+          )}
         </div>
         <div className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 mt-6">
           <LockKeyhole className="w-3.5 h-3.5" />
@@ -178,9 +213,160 @@ export const AuthPage: React.FC<Props> = ({ mode, version = 'dev', onSuccess }) 
   )
 }
 
+interface ForcePasswordChangeProps {
+  admin: Admin
+  version?: string
+  resetAdminEnvActive?: boolean
+  onSuccess: (admin: Admin, resetAdminEnvActive?: boolean) => void
+  onLogout: () => void
+}
+
+export const ForcePasswordChangePage: React.FC<ForcePasswordChangeProps> = ({
+  admin,
+  version = 'dev',
+  resetAdminEnvActive = false,
+  onSuccess,
+  onLogout,
+}) => {
+  const { t } = useI18n()
+  const versionLabel = version && version !== 'dev' && !version.startsWith('v') ? `v${version}` : version || 'dev'
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    if (password !== confirm) {
+      setError(t('auth.passwordMismatch'))
+      return
+    }
+    setLoading(true)
+    try {
+      const res = await api.changePassword('', password)
+      const nextAdmin = res.admin ? res.admin : { ...admin, must_change_password: false }
+      onSuccess(nextAdmin, res.reset_admin_env_active)
+    } catch (err: any) {
+      setError(err?.message || t('auth.actionFailed'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 sm:p-12 bg-[#f7f9fc] dark:bg-[#0b1120] transition-colors relative">
+      <div className="absolute top-5 right-5 sm:top-6 sm:right-6">
+        <PreferenceControls />
+      </div>
+
+      <div className="w-full max-w-md space-y-4">
+        {resetAdminEnvActive && <ResetAdminBanner />}
+
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xl shadow-slate-200/30 dark:shadow-black/40 p-6 sm:p-9">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+              <LockKeyhole className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                {t('auth.forceResetTitle')}
+              </h1>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-5">
+                {t('auth.forceResetSubtitle', { username: admin.username })}
+              </p>
+            </div>
+          </div>
+
+          {error && (
+            <div role="alert" className="mb-4 p-3 rounded-lg bg-rose-50 dark:bg-rose-500/15 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-sm">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label htmlFor="force-new-password" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                {t('auth.newPassword')}{t('auth.passwordMinHint')}
+              </label>
+              <div className="relative">
+                <input
+                  id="force-new-password"
+                  autoComplete="new-password"
+                  autoFocus
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  minLength={8}
+                  disabled={loading}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={t('auth.passwordPlaceholder')}
+                  className="w-full pl-3 pr-11 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <button
+                  type="button"
+                  disabled={loading}
+                  aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="force-confirm-password" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                {t('auth.confirmPassword')}
+              </label>
+              <input
+                id="force-confirm-password"
+                autoComplete="new-password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={8}
+                disabled={loading}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={loading}
+                onClick={onLogout}
+                className="px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
+              >
+                {t('auth.backToLogin')}
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 flex justify-center items-center gap-2 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition"
+              >
+                {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+                {loading ? t('auth.verifying') : t('auth.forceResetSubmit')}
+                {!loading && <ArrowRight className="w-4 h-4" />}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div className="text-center text-xs text-slate-400 dark:text-slate-500">
+          {t('auth.footerBrand')} · <span className="font-mono">{versionLabel}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface SessionExpiredModalProps {
   initialUsername: string
-  onSuccess: (admin: Admin) => void
+  onSuccess: (admin: Admin, resetAdminEnvActive?: boolean) => void
   onLogout: () => void
 }
 
@@ -205,7 +391,7 @@ export const SessionExpiredModal: React.FC<SessionExpiredModalProps> = ({
     try {
       const res = await api.login(username.trim(), password)
       toast.success(t('auth.reloginSuccess'))
-      onSuccess(res.admin)
+      onSuccess(res.admin, res.reset_admin_env_active)
     } catch (err: any) {
       setError(formatAuthError(err, t))
     } finally {

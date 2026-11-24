@@ -71,6 +71,8 @@ job "safekeep" {
         # SAFEKEEP_MASTER_KEY    = ""
         # 可选：额外允许跨域的 Origin 白名单（多个用英文逗号分隔）
         # SAFEKEEP_CORS_ORIGINS  = "http://192.168.1.10:8333"
+        # 可选：忘记管理员密码时临时设为 "true" 重启以在日志打印一次性临时密码；登录后请改回 "false" 或移除
+        # RESET_ADMIN            = "false"
 
         # 注：上传限额（默认 100 MiB）、每日流量熔断（默认 1 GiB）、缓冲总容量上限与任务调度参数
         #（Worker 并发数、同步超时、最大重试次数）统一持久化在 SQLite 数据库，请在 Web 管理端「系统设置 -> 全局运行参数」中配置。

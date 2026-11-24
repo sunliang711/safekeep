@@ -87,6 +87,7 @@ safekeep/
 | `username` | TEXT UNIQUE | 登录用户名 |
 | `password_hash` | TEXT | bcrypt/argon2id 哈希 |
 | `is_active` | INTEGER | 1=启用，0=禁用 |
+| `must_change_password` | INTEGER | 1=强制登录后立即修改密码，0=正常 |
 | `last_login_at` | DATETIME | 最近登录时间 |
 | `created_at` / `updated_at` | DATETIME | 创建/更新时间 |
 
@@ -310,6 +311,7 @@ Client POST /api/v1/backups?mode=sync|async&targets=up_1,up_2
 - **初始化与认证**：
   - `GET /setup/status`、`POST /setup/init`（仅首次无管理员时可用）
   - `POST /auth/login`、`POST /auth/logout`、`GET /auth/me`、`PUT /auth/password`
+  - 环境变量 `RESET_ADMIN=true`（或 `SAFEKEEP_RESET_ADMIN=true`、配置文件 `server.reset_admin = true`）开启时，服务启动将重置主管理员（优先 `admin`，否则最早创建的管理员；无管理员时自动创建 `admin`）为一次性随机临时密码并打印至标准输出，启用该账号并将 `must_change_password` 置为 `1`、同时使旧登录态立即失效。该状态下管理员仅可访问 `/auth/me`、`/auth/logout` 与 `/auth/password`，完成新密码设置前其余管理接口返回 `403 password_change_required`；Web UI 顶部在 `RESET_ADMIN` 启用期间持续提示移除该配置。
 - **仪表盘**：
   - `GET /dashboard/summary`（今日/近 7 天备份量与成功率、队列深度、缓冲盘占用、上游健康状态）
 - **共享代理管理**：

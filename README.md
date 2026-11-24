@@ -32,6 +32,7 @@ SafeKeep 是一个使用 **Go** 开发的单二进制多云文件备份 HTTP 网
 - `SAFEKEEP_LISTEN`：监听地址（默认 `:8333`）
 - `SAFEKEEP_DATA_DIR`：数据目录（默认 `./data`，镜像内默认为 `/data`）
 - `SAFEKEEP_MASTER_KEY`：可选 32 字节加密主密钥（64 位十六进制或 Base64）
+- `RESET_ADMIN`（或 `SAFEKEEP_RESET_ADMIN`）：设为 `true` 启动时重置主管理员密码为一次性随机临时密码（输出到启动日志），登录后强制要求设置新密码；改密完成后请移除该变量或设为 `false`
 - `SAFEKEEP_CORS_ORIGINS`：额外允许的跨域 Origin（逗号分隔）
 - `SAFEKEEP_PUBLIC_BASE_URL`：对外回调地址（默认 `http://localhost:8333`）
 - `SAFEKEEP_SPOOL_DIR`：临时缓冲目录（默认 `./data/spool`）
