@@ -9,61 +9,8 @@ import { StatusBadge } from '../components/Badge'
 import { useToast } from '../components/Toast'
 import { useI18n } from '../contexts/I18nContext'
 import type { TranslationKey } from '../i18n/zh'
-import { describeCron } from '../utils/cron'
+import { CRON_PRESETS, describeCron, formatCronPresetLabel, matchCronPreset } from '../utils/cron'
 import type { Client, CronJob, CronJobRun } from '../types'
-
-interface PresetOption {
-  labelKey: TranslationKey
-  value: string
-}
-
-const BASE_PRESETS: PresetOption[] = [
-  { labelKey: 'cron.preset.hourly', value: '0 * * * *' },
-  { labelKey: 'cron.preset.daily', value: '0 4 * * *' },
-  { labelKey: 'cron.preset.weekly', value: '0 5 * * 1' },
-  { labelKey: 'cron.preset.monthly', value: '0 4 1 * *' },
-  { labelKey: 'cron.preset.custom', value: 'custom' },
-]
-
-function getPlanPresets(jobKey?: string): PresetOption[] {
-  let extra: PresetOption[] = []
-  switch (jobKey) {
-    case 'cleanup_audit_logs':
-      extra = [{ labelKey: 'cron.preset.daily02', value: '0 2 * * *' }]
-      break
-    case 'cleanup_task_records':
-      extra = [{ labelKey: 'cron.preset.daily03', value: '0 3 * * *' }]
-      break
-    case 'cleanup_orphan_spool':
-      extra = [
-        { labelKey: 'cron.preset.every30m', value: '*/30 * * * *' },
-        { labelKey: 'cron.preset.every6h', value: '0 */6 * * *' },
-      ]
-      break
-    case 'upstream_health_check':
-      extra = [
-        { labelKey: 'cron.preset.every5m', value: '*/5 * * * *' },
-        { labelKey: 'cron.preset.every15m', value: '*/15 * * * *' },
-        { labelKey: 'cron.preset.every30m', value: '*/30 * * * *' },
-      ]
-      break
-    case 'dropbox_token_refresh':
-      extra = [
-        { labelKey: 'cron.preset.every2h', value: '0 */2 * * *' },
-        { labelKey: 'cron.preset.every4h', value: '0 */4 * * *' },
-        { labelKey: 'cron.preset.every6h', value: '0 */6 * * *' },
-      ]
-      break
-    case 'migration_backup':
-      extra = [
-        { labelKey: 'cron.preset.daily05', value: '0 5 * * *' },
-        { labelKey: 'cron.preset.day1and15', value: '30 4 1,15 * *' },
-      ]
-      break
-  }
-  const seen = new Set(extra.map((item) => item.value))
-  return [...extra, ...BASE_PRESETS.filter((item) => !seen.has(item.value))]
-}
 
 const JOB_I18N: Record<string, { name: TranslationKey; desc: TranslationKey }> = {
   cleanup_audit_logs: { name: 'cron.job.cleanup_audit_logs.name', desc: 'cron.job.cleanup_audit_logs.desc' },
@@ -278,11 +225,8 @@ export const CronPage: React.FC = () => {
     load()
   }, [])
 
-  const planPresets = useMemo(() => getPlanPresets(editing?.job_key), [editing?.job_key])
-
   const openEdit = (job: CronJob, overrideEnabled?: boolean) => {
-    const presets = getPlanPresets(job.job_key)
-    const matched = presets.find((item) => item.value === job.cron_expr)?.value ?? 'custom'
+    const matched = matchCronPreset(job.cron_expr)
     const parsedParams = parseStructuredParams(job)
     const nextEnabled = overrideEnabled ?? job.enabled
     const nextTimeout = job.timeout_sec > 0 ? job.timeout_sec : 300
@@ -719,13 +663,9 @@ export const CronPage: React.FC = () => {
                 onChange={(e) => handlePresetChange(e.target.value)}
                 className="w-full px-3 py-2 text-xs border rounded-lg bg-white dark:bg-slate-900"
               >
-                {planPresets.map((opt) => (
+                {CRON_PRESETS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
-                    {opt.value === 'custom'
-                      ? t(opt.labelKey)
-                      : lang === 'en'
-                      ? `${t(opt.labelKey)} (${opt.value})`
-                      : `${t(opt.labelKey)}（${opt.value}）`}
+                    {formatCronPresetLabel(opt, t(opt.labelKey), lang)}
                   </option>
                 ))}
               </select>

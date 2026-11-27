@@ -1,4 +1,35 @@
 import { getCurrentLang, type Lang } from '../contexts/I18nContext'
+import type { TranslationKey } from '../i18n/zh'
+
+export interface CronPresetOption {
+  labelKey: TranslationKey
+  value: string
+}
+
+export const CRON_PRESETS: readonly CronPresetOption[] = [
+  { labelKey: 'cron.preset.every1m', value: '* * * * *' },
+  { labelKey: 'cron.preset.every5m', value: '*/5 * * * *' },
+  { labelKey: 'cron.preset.every10m', value: '*/10 * * * *' },
+  { labelKey: 'cron.preset.hourly', value: '0 * * * *' },
+  { labelKey: 'cron.preset.daily', value: '0 0 * * *' },
+  { labelKey: 'cron.preset.weekly', value: '0 0 * * 1' },
+  { labelKey: 'cron.preset.monthly', value: '0 0 1 * *' },
+  { labelKey: 'cron.preset.custom', value: 'custom' },
+]
+
+export function matchCronPreset(expr: string): string {
+  const trimmed = expr.trim()
+  return CRON_PRESETS.find((item) => item.value !== 'custom' && item.value === trimmed)?.value ?? 'custom'
+}
+
+export function formatCronPresetLabel(
+  option: CronPresetOption,
+  label: string,
+  lang: Lang = getCurrentLang()
+): string {
+  if (option.value === 'custom') return label
+  return lang === 'en' ? `${label} (${option.value})` : `${label}（${option.value}）`
+}
 
 // Translate common 5-field cron expressions to Chinese or English; return null if too complex.
 
