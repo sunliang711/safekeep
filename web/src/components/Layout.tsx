@@ -120,7 +120,7 @@ export const Layout: React.FC<Props> = ({
         </div>
 
         <nav aria-label={t('nav.mainAria')} className="flex-1 px-4 py-4 overflow-y-auto">
-          {navItems.map((item, index) => {
+          {navItems.filter(item => admin.role === 'admin' || item.id !== 'migration').map((item, index) => {
             const isActive = active === item.id
             return (
               <React.Fragment key={item.id}>
@@ -154,7 +154,7 @@ export const Layout: React.FC<Props> = ({
           </div>
           <div className="truncate flex-1">
             <div className="text-white font-medium truncate">{admin.username}</div>
-            <div className="text-slate-500 mt-1">{t('app.roleAdmin')}</div>
+            <div className="text-slate-500 mt-1">{admin.role === 'admin' ? t('app.roleAdmin') : t('accounts.viewer')}</div>
           </div>
           <button
             onClick={onLogout}
@@ -194,6 +194,7 @@ export const Layout: React.FC<Props> = ({
                 <ResetAdminBanner />
               </div>
             )}
+            {admin.role === 'viewer' && <div role="status" className="mb-5 rounded-xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/10 p-3 text-sm text-indigo-700 dark:text-indigo-300">{t('accounts.readonlyNotice')}</div>}
             {children}
           </div>
           <footer className="px-8 py-6 text-[11px] text-slate-400 dark:text-slate-500 flex flex-wrap gap-2 justify-between">

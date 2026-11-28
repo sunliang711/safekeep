@@ -1,3 +1,4 @@
+import { useReadOnly } from '../contexts/PermissionContext'
 import React, { useState } from 'react'
 import { Loader2, Plus, Trash2, Wifi } from 'lucide-react'
 import { api } from '../api'
@@ -21,6 +22,7 @@ interface ProxyForm {
 }
 
 export function ProxyManager({ proxies, onChanged }: { proxies: NetworkProxy[]; onChanged: () => Promise<void> }) {
+  const readOnly = useReadOnly()
   const askConfirm = useConfirm()
   const { t } = useI18n()
   const toast = useToast()
@@ -107,7 +109,7 @@ export function ProxyManager({ proxies, onChanged }: { proxies: NetworkProxy[]; 
           <h2 className="font-semibold text-slate-900 dark:text-slate-100">{t('proxies.title')}</h2>
           <p className="text-xs text-slate-500 mt-1">{t('proxies.description')}</p>
         </div>
-        <button onClick={() => open()} className="inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"><Plus className="w-4 h-4" />{t('proxies.add')}</button>
+        <button disabled={readOnly} onClick={() => open()} className="inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"><Plus className="w-4 h-4" />{t('proxies.add')}</button>
       </div>
       {proxies.length === 0 ? <p className="text-sm text-slate-400">{t('proxies.empty')}</p> : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -118,8 +120,8 @@ export function ProxyManager({ proxies, onChanged }: { proxies: NetworkProxy[]; 
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="text-slate-500">{t('proxies.usage', { count: p.upstream_count })}</span>
                 <div className="flex items-center gap-3">
-                  <button onClick={() => open(p)} className="text-indigo-600 dark:text-indigo-400">{t('common.edit')}</button>
-                  <button onClick={() => remove(p)} disabled={p.upstream_count > 0} title={p.upstream_count > 0 ? t('proxies.inUse') : undefined} className="inline-flex items-center gap-1 text-rose-600 disabled:opacity-40 disabled:cursor-not-allowed"><Trash2 className="w-3.5 h-3.5" />{t('common.delete')}</button>
+                  <button disabled={readOnly} onClick={() => open(p)} className="text-indigo-600 dark:text-indigo-400">{t('common.edit')}</button>
+                  <button onClick={() => remove(p)} disabled={readOnly || (p.upstream_count > 0)} title={p.upstream_count > 0 ? t('proxies.inUse') : undefined} className="inline-flex items-center gap-1 text-rose-600 disabled:opacity-40 disabled:cursor-not-allowed"><Trash2 className="w-3.5 h-3.5" />{t('common.delete')}</button>
                 </div>
               </div>
             </div>

@@ -1,3 +1,4 @@
+import { useReadOnly } from '../contexts/PermissionContext'
 import React, { useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, Eye, KeyRound, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
@@ -28,6 +29,7 @@ interface ClientForm {
 }
 
 export const ClientsPage: React.FC = () => {
+  const readOnly = useReadOnly()
   const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
@@ -232,7 +234,7 @@ export const ClientsPage: React.FC = () => {
           <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('clients.title')}</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">{t('clients.subtitle')}</p>
         </div>
-        <button
+        <button disabled={readOnly}
           onClick={openNew}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
         >
@@ -436,19 +438,19 @@ export const ClientsPage: React.FC = () => {
                   <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
                     <button
                       type="button"
-                      disabled={revealingKeyId === c.id}
+                      disabled={readOnly || (revealingKeyId === c.id)}
                       onClick={() => handleRevealKey(c)}
                       className="text-xs text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline inline-flex items-center gap-0.5 disabled:opacity-50"
                     >
                       <Eye className="w-3 h-3" /> {revealingKeyId === c.id ? t('clients.readingKey') : t('clients.viewKey')}
                     </button>
-                    <button type="button" onClick={() => openEdit(c)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
+                    <button disabled={readOnly} type="button" onClick={() => openEdit(c)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
                       {t('common.edit')}
                     </button>
-                    <button type="button" onClick={() => handleRotate(c)} className="text-xs text-amber-600 dark:text-amber-400 hover:underline inline-flex items-center gap-0.5">
+                    <button disabled={readOnly} type="button" onClick={() => handleRotate(c)} className="text-xs text-amber-600 dark:text-amber-400 hover:underline inline-flex items-center gap-0.5">
                       <RefreshCw className="w-3 h-3" /> {t('clients.rotateKey')}
                     </button>
-                    <button type="button" aria-label={t('clients.deleteAria', { name: c.name })} onClick={() => handleDelete(c)} className="text-xs text-rose-600 dark:text-rose-400 hover:underline inline-flex items-center">
+                    <button disabled={readOnly} type="button" aria-label={t('clients.deleteAria', { name: c.name })} onClick={() => handleDelete(c)} className="text-xs text-rose-600 dark:text-rose-400 hover:underline inline-flex items-center">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
@@ -460,7 +462,7 @@ export const ClientsPage: React.FC = () => {
                     <EmptyState
                       title={t('clients.emptyTitle')}
                       description={t('clients.emptyDesc')}
-                      action={<button className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />{t('clients.emptyAction')}</button>}
+                      action={<button disabled={readOnly} className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />{t('clients.emptyAction')}</button>}
                     />
                   </td>
                 </tr>

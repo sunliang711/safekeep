@@ -710,16 +710,28 @@ func (s *Server) handleListAdmins(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 	actor := currentAdmin(r)
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username        string `json:"username"`
+		Password        string `json:"password"`
+		Role            string `json:"role"`
+		CurrentPassword string `json:"current_password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
+	if !s.verifyAccountChange(w, r, req.CurrentPassword) {
+		return
+	}
+	if req.Role == "" {
+		req.Role = db.RoleViewer
+	}
+	if req.Role != db.RoleAdmin && req.Role != db.RoleViewer {
+		writeError(w, http.StatusBadRequest, "invalid_role", "role must be admin or viewer")
+		return
+	}
 	req.Username = strings.TrimSpace(req.Username)
-	if len(req.Username) < 3 || len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "validation_error", "username >= 3 chars and password >= 8 chars required")
+	if len(req.Username) < 3 || len(req.Password) < 8 || len(req.Password) > 72 {
+		writeError(w, http.StatusBadRequest, "validation_error", "username >= 3 chars and password between 8 and 72 bytes required")
 		return
 	}
 	hash, err := crypto.HashPassword(req.Password)
@@ -732,9 +744,10 @@ func (s *Server) handleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 		Username:     req.Username,
 		PasswordHash: hash,
 		IsActive:     true,
+		Role:         req.Role,
 	}
 	if err := s.store.CreateAdmin(r.Context(), a); err != nil {
-		writeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		writeError(w, http.StatusConflict, "create_failed", "unable to create account; username may already exist")
 		return
 	}
 	s.auditLog.Record(r.Context(), audit.Event{
@@ -745,7 +758,7 @@ func (s *Server) handleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 		ResourceType: "admin",
 		ResourceID:   a.ID,
 		IPAddress:    clientIP(r),
-		Detail:       map[string]any{"username": a.Username},
+		Detail:       map[string]any{"username": a.Username, "role": a.Role},
 	})
 	s.notifyAdminEvent(
 		"admin.create",
@@ -761,46 +774,44 @@ func (s *Server) handleUpdateAdmin(w http.ResponseWriter, r *http.Request) {
 	actor := currentAdmin(r)
 	id := chi.URLParam(r, "id")
 	var req struct {
-		IsActive *bool   `json:"is_active"`
-		Password *string `json:"password"`
+		IsActive        *bool   `json:"is_active"`
+		Password        *string `json:"password"`
+		Role            *string `json:"role"`
+		CurrentPassword string  `json:"current_password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	if req.IsActive != nil {
-		if id == actor.ID && !*req.IsActive {
-			writeError(w, http.StatusBadRequest, "cannot_disable_self", "cannot disable your own admin account")
-			return
-		}
-		if err := s.store.UpdateAdminActive(r.Context(), id, *req.IsActive); err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "not_found", "admin not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "update_failed", err.Error())
-			return
-		}
+	if !s.verifyAccountChange(w, r, req.CurrentPassword) {
+		return
 	}
+	if req.Role != nil && *req.Role != db.RoleAdmin && *req.Role != db.RoleViewer {
+		writeError(w, http.StatusBadRequest, "invalid_role", "role must be admin or viewer")
+		return
+	}
+	if req.IsActive != nil && id == actor.ID && !*req.IsActive {
+		writeError(w, http.StatusBadRequest, "cannot_disable_self", "cannot disable your own account")
+		return
+	}
+	var passwordHash *string
 	if req.Password != nil && *req.Password != "" {
-		if len(*req.Password) < 8 {
-			writeError(w, http.StatusBadRequest, "weak_password", "password must be at least 8 characters")
+		if len(*req.Password) < 8 || len(*req.Password) > 72 {
+			writeError(w, http.StatusBadRequest, "weak_password", "password must contain 8 to 72 characters")
 			return
 		}
 		hash, err := crypto.HashPassword(*req.Password)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "hash_error", err.Error())
+			writeError(w, http.StatusInternalServerError, "hash_error", "unable to hash password")
 			return
 		}
-		if err := s.store.UpdateAdminPassword(r.Context(), id, hash); err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "not_found", "admin not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "update_failed", err.Error())
-			return
-		}
+		passwordHash = &hash
 	}
+	if err := s.store.UpdateAdminAccount(r.Context(), id, req.Role, req.IsActive, passwordHash); err != nil {
+		writeAccountError(w, err)
+		return
+	}
+
 	a, err := s.store.GetAdminByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
@@ -810,6 +821,15 @@ func (s *Server) handleUpdateAdmin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
 		return
 	}
+	if id == actor.ID && passwordHash != nil && a.Role == db.RoleAdmin {
+		token, err := s.createAdminSession(r, a)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "session_error", "password updated; please sign in again")
+			return
+		}
+		s.setAdminCookie(w, r, token)
+	}
+
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
 		ActorID:      actor.ID,
@@ -818,6 +838,7 @@ func (s *Server) handleUpdateAdmin(w http.ResponseWriter, r *http.Request) {
 		ResourceType: "admin",
 		ResourceID:   id,
 		IPAddress:    clientIP(r),
+		Detail:       map[string]any{"role": a.Role, "is_active": a.IsActive, "password_reset": passwordHash != nil},
 	})
 	s.notifyAdminEvent(
 		"admin.update",

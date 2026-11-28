@@ -89,6 +89,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			updated_at DATETIME NOT NULL,
 			updated_by TEXT NOT NULL DEFAULT ''
 		);`,
+		`CREATE TABLE IF NOT EXISTS admin_sessions (
+			id TEXT PRIMARY KEY,
+			admin_id TEXT NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+			token_hash TEXT NOT NULL UNIQUE,
+			client_ip TEXT NOT NULL,
+			user_agent TEXT NOT NULL,
+			created_at DATETIME NOT NULL,
+			last_seen_at DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id, expires_at);`,
 		`CREATE TABLE IF NOT EXISTS proxies (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
@@ -261,6 +272,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if err := s.ensureColumn(ctx, "admins", "must_change_password", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("ensure admins.must_change_password: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "admins", "role", "TEXT NOT NULL DEFAULT 'admin'"); err != nil {
+		return fmt.Errorf("ensure admins.role: %w", err)
 	}
 	if err := s.ensureColumn(ctx, "clients", "key_encrypted", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensure clients.key_encrypted: %w", err)

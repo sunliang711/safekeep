@@ -1,3 +1,4 @@
+import { useReadOnly } from '../contexts/PermissionContext'
 import React, { useEffect, useState } from 'react'
 import { AlertTriangle, ArrowRight, CheckCircle2, Cloud, FileArchive, HardDrive, RefreshCw, ShieldCheck, Upload } from 'lucide-react'
 import { api, formatBytes, formatTime } from '../api'
@@ -11,6 +12,7 @@ import { APIUploadsChart } from '../components/APIUploadsChart'
 import type { DashboardSummary } from '../types'
 
 export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({ onNavigate }) => {
+  const readOnly = useReadOnly()
   const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
@@ -186,7 +188,7 @@ export const DashboardPage: React.FC<{ onNavigate: (tab: NavTab) => void }> = ({
                 setResetting(false)
               }
             }}
-            disabled={resetting}
+            disabled={readOnly || (resetting)}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-medium ${
               data.daily_traffic.tripped
                 ? 'bg-rose-600 hover:bg-rose-700 text-white'

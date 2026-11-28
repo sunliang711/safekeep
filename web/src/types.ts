@@ -1,6 +1,17 @@
+export interface AdminSession {
+  id: string;
+  client_ip: string;
+  user_agent: string;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  current: boolean;
+}
+
 export interface Admin {
   id: string;
   username: string;
+  role: 'admin' | 'viewer';
   is_active: boolean;
   must_change_password?: boolean;
   last_login_at?: string;

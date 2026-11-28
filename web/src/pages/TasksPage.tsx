@@ -1,3 +1,4 @@
+import { useReadOnly } from '../contexts/PermissionContext'
 import React, { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Download, RotateCcw, Search, Upload, XCircle } from 'lucide-react'
 import { EmptyState } from '../components/Feedback'
@@ -14,6 +15,7 @@ interface TasksPageProps {
 }
 
 export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
+  const readOnly = useReadOnly()
   const { t, lang } = useI18n()
   const [tasks, setTasks] = useState<BackupTask[]>([])
   const [loading, setLoading] = useState(true)
@@ -245,7 +247,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
           <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('tasks.title')}</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">{t('tasks.subtitle', { total })}</p>
         </div>
-        <button
+        <button disabled={readOnly}
           onClick={openUploadModal}
           className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
         >
@@ -356,7 +358,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                       </a>
                     )}
                     {(task.status === 'failed' || task.status === 'partial_success') && (
-                      <button disabled={Boolean(retryingId)} onClick={() => handleRetry(task.id)} className="text-xs text-amber-600 dark:text-amber-400 hover:underline inline-flex items-center gap-0.5">
+                      <button disabled={readOnly || (Boolean(retryingId))} onClick={() => handleRetry(task.id)} className="text-xs text-amber-600 dark:text-amber-400 hover:underline inline-flex items-center gap-0.5">
                         <RotateCcw className="w-3.5 h-3.5" /> {t('common.retry')}
                       </button>
                     )}
@@ -372,7 +374,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                     description={loading ? undefined : q || status || mode ? t('tasks.emptyFilteredDesc') : t('tasks.emptyDesc')}
                     action={
                       !loading && (
-                        <button className="text-xs font-medium text-indigo-600 dark:text-indigo-400" onClick={q || status || mode ? resetFilters : openUploadModal}>
+                        <button disabled={readOnly} className="text-xs font-medium text-indigo-600 dark:text-indigo-400" onClick={q || status || mode ? resetFilters : openUploadModal}>
                           {q || status || mode ? t('common.resetFilters') : t('tasks.uploadBtn')}
                         </button>
                       )
@@ -468,7 +470,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
               {(selected.status === 'failed' || selected.status === 'partial_success') && (
-                <button disabled={Boolean(retryingId)} onClick={() => handleRetry(selected.id)} className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm">
+                <button disabled={readOnly || (Boolean(retryingId))} onClick={() => handleRetry(selected.id)} className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm">
                   {retryingId ? t('common.retrying') : t('tasks.detail.retryFailedUpstreams')}
                 </button>
               )}
@@ -507,7 +509,7 @@ export const TasksPage: React.FC<TasksPageProps> = ({ onNavigate }) => {
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          disabled={creatingDefaultClient}
+                          disabled={readOnly || (creatingDefaultClient)}
                           onClick={handleCreateDefaultClient}
                           className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-medium"
                         >

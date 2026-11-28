@@ -30,7 +30,7 @@ func TestBootstrapResetAdminAndForcedPasswordChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAdminByUsername: %v", err)
 	}
-	if err := env.store.UpdateAdminActive(context.Background(), createdAdmin.ID, false); err != nil {
+	if _, err := env.store.DB().ExecContext(context.Background(), `UPDATE admins SET is_active = 0 WHERE id = ?`, createdAdmin.ID); err != nil {
 		t.Fatalf("UpdateAdminActive: %v", err)
 	}
 
@@ -189,8 +189,10 @@ func TestBootstrapResetAdminEmptyCreatesAdminAndPrefersAdminUsername(t *testing.
 		t.Fatalf("setup init ops: %d", initResp.StatusCode)
 	}
 	createAdminResp := env.adminReq(t, http.MethodPost, "/admin/api/v1/admins", map[string]string{
-		"username": "admin",
-		"password": "admin-password-123",
+		"username":         "admin",
+		"password":         "admin-password-123",
+		"role":             "admin",
+		"current_password": "ops-password-123",
 	})
 	createAdminResp.Body.Close()
 	if createAdminResp.StatusCode != http.StatusCreated {

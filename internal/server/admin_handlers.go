@@ -122,7 +122,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := s.signAdminToken(admin)
+	tok, err := s.createAdminSession(r, admin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "token_error", err.Error())
 		return
@@ -176,7 +176,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = s.store.UpdateAdminLogin(r.Context(), admin.ID)
-	tok, err := s.signAdminToken(admin)
+	tok, err := s.createAdminSession(r, admin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "token_error", err.Error())
 		return
@@ -208,6 +208,24 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
+	if token := adminTokenFromRequest(r); token != "" {
+		session, err := s.store.GetAdminSession(r.Context(), adminTokenHash(token))
+		if err != nil && !errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusInternalServerError, "session_error", "unable to sign out")
+			return
+		}
+		if err == nil {
+			if err := s.store.DeleteAdminSession(r.Context(), session.AdminID, session.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "session_error", "unable to sign out")
+				return
+			}
+		}
+	}
+	s.clearAdminCookie(w, r)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) clearAdminCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
 		Value:    "",
@@ -217,7 +235,6 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		SameSite: http.SameSiteLaxMode,
 	})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleAdminMe(w http.ResponseWriter, r *http.Request) {
@@ -263,9 +280,12 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 	admin.PasswordHash = hash
 	admin.MustChangePassword = false
-	if tok, err := s.signAdminToken(admin); err == nil {
-		s.setAdminCookie(w, r, tok)
+	tok, err := s.createAdminSession(r, admin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "session_error", "password updated; please sign in again")
+		return
 	}
+	s.setAdminCookie(w, r, tok)
 	s.auditLog.Record(r.Context(), audit.Event{
 		ActorType:    "admin",
 		ActorID:      admin.ID,

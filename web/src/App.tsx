@@ -4,6 +4,7 @@ import { Layout, type NavTab } from './components/Layout'
 import { LoadingState } from './components/Feedback'
 import { ToastProvider } from './components/Toast'
 import { allowNavigation } from './components/ConfirmDialog'
+import { ReadOnlyContext } from './contexts/PermissionContext'
 import { useI18n } from './contexts/I18nContext'
 import { AuditPage } from './pages/AuditPage'
 import { AuthPage, ForcePasswordChangePage, SessionExpiredModal } from './pages/AuthPages'
@@ -41,6 +42,13 @@ export function App() {
   const [tab, setTab] = useState<NavTab>(initialTab())
   const [sessionExpired, setSessionExpired] = useState(false)
   const reauthResolversRef = useRef<((ok: boolean) => void)[]>([])
+
+  useEffect(() => {
+    if (admin?.role === 'viewer' && tab === 'migration') {
+      setTab('settings')
+      window.history.replaceState({}, '', '/settings')
+    }
+  }, [admin?.role, tab])
 
   const settleReauth = useCallback((ok: boolean) => {
     setSessionExpired(false)
@@ -201,6 +209,7 @@ export function App() {
 
   return (
     <ToastProvider>
+      <ReadOnlyContext.Provider key={`${admin.id}:${admin.role}`} value={admin.role === 'viewer'}>
       <Layout
         active={tab}
         onNavigate={navigate}
@@ -224,8 +233,8 @@ export function App() {
         {tab === 'clients' && <ClientsPage />}
         {tab === 'cron' && <CronPage />}
         {tab === 'audit' && <AuditPage />}
-        {tab === 'migration' && <MigrationPage />}
-        {tab === 'settings' && <SettingsPage />}
+        {tab === 'migration' && admin.role === 'admin' && <MigrationPage />}
+        {tab === 'settings' && <SettingsPage admin={admin} onSignedOut={() => { settleReauth(false); setAdmin(null) }} />}
       </Layout>
       {sessionExpired && (
         <SessionExpiredModal
@@ -242,6 +251,7 @@ export function App() {
           }}
         />
       )}
+      </ReadOnlyContext.Provider>
     </ToastProvider>
   )
 }

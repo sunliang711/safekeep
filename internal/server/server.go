@@ -37,8 +37,9 @@ const adminCookieName = "safekeep_admin_token"
 type ctxKey string
 
 const (
-	ctxAdminKey  ctxKey = "admin"
-	ctxClientKey ctxKey = "client"
+	ctxAdminKey   ctxKey = "admin"
+	ctxClientKey  ctxKey = "client"
+	ctxSessionKey ctxKey = "admin_session"
 )
 
 type Server struct {
@@ -199,6 +200,9 @@ func (s *Server) Router() http.Handler {
 
 			r.Group(func(r chi.Router) {
 				r.Use(s.requirePasswordChangedMiddleware)
+				r.Use(s.accountPermissionMiddleware)
+				r.Get("/auth/sessions", s.handleListAdminSessions)
+				r.Delete("/auth/sessions/{id}", s.handleRevokeAdminSession)
 
 				r.Get("/dashboard/summary", s.handleDashboardSummary)
 				s.registerRemoteRoutes(r)
@@ -404,15 +408,7 @@ func (s *Server) allowClientRequest(clientID string, rpm int) bool {
 
 func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var tokStr string
-		if c, err := r.Cookie(adminCookieName); err == nil {
-			tokStr = c.Value
-		}
-		if tokStr == "" {
-			if auth := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-				tokStr = strings.TrimSpace(auth[7:])
-			}
-		}
+		tokStr := adminTokenFromRequest(r)
 		if tokStr == "" {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "admin login required")
 			return
@@ -440,7 +436,19 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "session_revoked", "session revoked due to credential change")
 			return
 		}
+		session, err := s.store.GetAdminSession(r.Context(), adminTokenHash(tokStr))
+		if err != nil || session.AdminID != admin.ID {
+			writeError(w, http.StatusUnauthorized, "session_revoked", "session expired or revoked")
+			return
+		}
+		if now := time.Now().UTC(); now.Sub(session.LastSeenAt) >= time.Minute {
+			if err := s.store.TouchAdminSession(r.Context(), session.ID, now); err != nil {
+				writeError(w, http.StatusInternalServerError, "session_error", "unable to update session")
+				return
+			}
+		}
 		ctx := context.WithValue(r.Context(), ctxAdminKey, admin)
+		ctx = context.WithValue(ctx, ctxSessionKey, session)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -460,14 +468,15 @@ func passwordVersion(hash string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-func (s *Server) signAdminToken(admin *db.Admin) (string, error) {
-	now := time.Now().UTC()
+func (s *Server) signAdminToken(admin *db.Admin, session *db.AdminSession) (string, error) {
+	now := session.CreatedAt
 	claims := jwt.MapClaims{
 		"sub":      admin.ID,
 		"username": admin.Username,
 		"pwd_v":    passwordVersion(admin.PasswordHash),
 		"iat":      now.Unix(),
-		"exp":      now.Add(24 * time.Hour).Unix(),
+		"exp":      session.ExpiresAt.Unix(),
+		"jti":      session.ID,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return tok.SignedString(s.jwtSecret)

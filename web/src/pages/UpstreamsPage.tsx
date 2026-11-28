@@ -1,3 +1,4 @@
+import { useReadOnly } from '../contexts/PermissionContext'
 import React, { useEffect, useState } from 'react'
 import { CheckCircle2, Copy, Link2, Loader2, Plus, Trash2, Upload, Wifi, XCircle } from 'lucide-react'
 import { EmptyState, LoadingState } from '../components/Feedback'
@@ -62,6 +63,7 @@ const emptyForm = (): FormState => ({
 })
 
 export const UpstreamsPage: React.FC = () => {
+  const readOnly = useReadOnly()
   const askConfirm = useConfirm()
   const toast = useToast()
   const { t } = useI18n()
@@ -333,7 +335,7 @@ export const UpstreamsPage: React.FC = () => {
           <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('upstreams.title')}</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">{t('upstreams.subtitle')}</p>
         </div>
-        {activeTab === 'upstreams' && <button
+        {activeTab === 'upstreams' && <button disabled={readOnly}
           onClick={openNew}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
         >
@@ -380,7 +382,7 @@ export const UpstreamsPage: React.FC = () => {
               <EmptyState
                 title={t('upstreams.emptyTitle')}
                 description={t('upstreams.emptyDesc')}
-                action={<button className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />{t('upstreams.addBtn')}</button>}
+                action={<button disabled={readOnly} className="primary-button" onClick={openNew}><Plus className="w-4 h-4" />{t('upstreams.addBtn')}</button>}
               />
             </div>
           )}
@@ -559,7 +561,7 @@ export const UpstreamsPage: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button
+                <button disabled={readOnly}
                   onClick={() => openEdit(u)}
                   className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-200 font-medium"
                 >
@@ -567,14 +569,14 @@ export const UpstreamsPage: React.FC = () => {
                 </button>
                 <button
                   onClick={() => handleTest(u.id)}
-                  disabled={testingId === u.id}
+                  disabled={readOnly || (testingId === u.id)}
                   className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-indigo-50 dark:bg-indigo-500/15 hover:bg-indigo-100 dark:hover:bg-indigo-500/25 text-indigo-700 dark:text-indigo-300 rounded-lg font-medium"
                 >
                   <Wifi className="w-3.5 h-3.5" />
                   {testingId === u.id ? t('upstreams.testing') : t('upstreams.testConnection')}
                 </button>
                 {u.type === 'dropbox' && (
-                  <button
+                  <button disabled={readOnly}
                     onClick={() => handleDropboxOAuth(u.id)}
                     className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-sky-50 dark:bg-sky-500/15 hover:bg-sky-100 dark:hover:bg-sky-500/25 text-sky-700 dark:text-sky-300 rounded-lg font-medium"
                   >
@@ -582,7 +584,7 @@ export const UpstreamsPage: React.FC = () => {
                     {t('upstreams.dropboxOAuthBtn')}
                   </button>
                 )}
-                <button
+                <button disabled={readOnly}
                   onClick={() => handleDelete(u)}
                   className="ml-auto p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg"
                   title={t('common.delete')}
@@ -929,7 +931,7 @@ export const UpstreamsPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={handleTestProxy}
-                          disabled={testingProxy || !form.proxy_id}
+                          disabled={readOnly || (testingProxy || !form.proxy_id)}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/15 hover:bg-indigo-100 dark:hover:bg-indigo-500/25 disabled:opacity-45 disabled:cursor-not-allowed text-indigo-700 dark:text-indigo-300 rounded-lg text-xs font-medium shrink-0"
                         >
                           {testingProxy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}

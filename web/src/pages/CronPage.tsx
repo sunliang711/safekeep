@@ -1,3 +1,4 @@
+import { useReadOnly } from '../contexts/PermissionContext'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus, RefreshCw, X } from 'lucide-react'
 import { LoadingState } from '../components/Feedback'
@@ -168,6 +169,7 @@ const Switch: React.FC<{
 )
 
 export const CronPage: React.FC = () => {
+  const readOnly = useReadOnly()
   const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
@@ -578,7 +580,7 @@ export const CronPage: React.FC = () => {
                     <div className="pt-0.5">
                       <Switch
                         checked={j.enabled}
-                        disabled={togglingId === j.id}
+                        disabled={readOnly || (togglingId === j.id)}
                         label={t('cron.toggleAria', { name: displayName })}
                         onChange={(next) => handleToggle(j, next)}
                       />
@@ -588,14 +590,14 @@ export const CronPage: React.FC = () => {
                     <div className="inline-flex items-center gap-1.5">
                       <button
                         type="button"
-                        disabled={Boolean(runningId)}
+                        disabled={readOnly || (Boolean(runningId))}
                         onClick={() => handleRunNow(j)}
                         className="px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 disabled:opacity-45 inline-flex items-center gap-1"
                       >
                         {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
                         {isRunning ? t('cron.running') : t('cron.runNow')}
                       </button>
-                      <button
+                      <button disabled={readOnly}
                         type="button"
                         onClick={() => openEdit(j)}
                         className="px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300"

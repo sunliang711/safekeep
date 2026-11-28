@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Check, CheckCircle2, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Loader2, Mail, Server, SlidersHorizontal, Users, XCircle } from 'lucide-react'
-import { Modal } from '../components/Modal'
+import { AccountsPanel } from '../components/AccountsPanel'
 import { useConfirm, type BeforeNavigateDetail } from '../components/ConfirmDialog'
 import { LoadingState } from '../components/Feedback'
 import { api, formatBytes, formatTime } from '../api'
@@ -79,11 +79,12 @@ function smtpSnapshot(cfg: {
   })
 }
 
-export const SettingsPage: React.FC = () => {
+export const SettingsPage: React.FC<{ admin: Admin; onSignedOut: () => void }> = ({ admin, onSignedOut }) => {
+  const isAdmin = admin.role === 'admin'
   const askConfirm = useConfirm()
   const toast = useToast()
   const { t, lang } = useI18n()
-  const [subTab, setSubTab] = useState<SettingsSubTab>('general')
+  const [subTab, setSubTab] = useState<SettingsSubTab>(isAdmin ? 'general' : 'admins')
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
   const [savedGeneralSnap, setSavedGeneralSnap] = useState('')
@@ -91,7 +92,6 @@ export const SettingsPage: React.FC = () => {
   const [maxFileSizeField, setMaxFileSizeField] = useState<SizeFieldState>({ amount: '100', unit: 'MB' })
   const [dailyLimitField, setDailyLimitField] = useState<SizeFieldState>({ amount: '1', unit: 'GB' })
   const [maxSpoolField, setMaxSpoolField] = useState<SizeFieldState>({ amount: '10', unit: 'GB' })
-  const [admins, setAdmins] = useState<Admin[]>([])
 
   // SMTP state
   const [smtpEnabled, setSmtpEnabled] = useState(false)
@@ -116,16 +116,6 @@ export const SettingsPage: React.FC = () => {
   const [smtpTesting, setSmtpTesting] = useState(false)
   const [smtpTestResult, setSmtpTestResult] = useState<{ ok: boolean; message: string; time: string } | null>(null)
 
-  // Admins state
-  const [newAdminUser, setNewAdminUser] = useState('')
-  const [newAdminPass, setNewAdminPass] = useState('')
-  const [creatingAdmin, setCreatingAdmin] = useState(false)
-  const [oldPwd, setOldPwd] = useState('')
-  const [newPwd, setNewPwd] = useState('')
-  const [changingOwnPwd, setChangingOwnPwd] = useState(false)
-  const [resetAdmin, setResetAdmin] = useState<Admin | null>(null)
-  const [resetPassword, setResetPassword] = useState('')
-  const [resettingPassword, setResettingPassword] = useState(false)
   const [loadError, setLoadError] = useState('')
 
   const applySavedSmtp = (smtp: SMTPConfig) => {
@@ -181,12 +171,12 @@ export const SettingsPage: React.FC = () => {
   const load = async () => {
     setLoading(true)
     setLoadError('')
+    if (!isAdmin) { setLoading(false); return }
     try {
-      const [s, a, smtp] = await Promise.all([api.getSettings(), api.listAdmins(), api.getSMTP()])
+      const [s, smtp] = await Promise.all([api.getSettings(), api.getSMTP()])
       setSettings(s)
       syncSizeFieldsFromSettings(s)
       setSavedGeneralSnap(JSON.stringify(s))
-      setAdmins(a.items || [])
       applySavedSmtp(smtp)
     } catch (e: any) {
       setLoadError(e.message || t('settings.loadError'))
@@ -332,38 +322,6 @@ export const SettingsPage: React.FC = () => {
     }
   }
 
-  const handleCreateAdmin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setCreatingAdmin(true)
-    try {
-      await api.createAdmin(newAdminUser, newAdminPass)
-      setNewAdminUser('')
-      setNewAdminPass('')
-      toast.success(t('settings.createdAdminToast'))
-      const res = await api.listAdmins()
-      setAdmins(res.items || [])
-    } catch (e: any) {
-      toast.error(e.message || t('settings.createAdminError'))
-    } finally {
-      setCreatingAdmin(false)
-    }
-  }
-
-  const handleChangeOwnPassword = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setChangingOwnPwd(true)
-    try {
-      await api.changePassword(oldPwd, newPwd)
-      setOldPwd('')
-      setNewPwd('')
-      toast.success(t('settings.changedOwnPwdToast'))
-    } catch (e: any) {
-      toast.error(e.message || t('settings.changeOwnPwdError'))
-    } finally {
-      setChangingOwnPwd(false)
-    }
-  }
-
   const subTabs: { id: SettingsSubTab; label: string; shortLabel: string; desc: string; icon: React.ReactNode; badge?: string }[] = [
     {
       id: 'general',
@@ -386,15 +344,14 @@ export const SettingsPage: React.FC = () => {
       shortLabel: t('settings.tabAdminsShort'),
       desc: t('settings.tabAdminsDesc'),
       icon: <Users className="w-4 h-4 shrink-0" />,
-      badge: `${admins.length}`,
     },
   ]
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{t('settings.title')}</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">{t('settings.subtitle')}</p>
+        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{isAdmin ? t('settings.title') : t('accounts.title')}</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400">{isAdmin ? t('settings.subtitle') : t('accounts.description')}</p>
       </div>
 
       <div className="space-y-5">
@@ -404,7 +361,7 @@ export const SettingsPage: React.FC = () => {
           role="tablist"
           className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-1.5 grid grid-cols-3 sm:inline-flex sm:flex-wrap sm:items-center gap-1"
         >
-          {subTabs.map((item) => {
+          {subTabs.filter(item => isAdmin || item.id === 'admins').map((item) => {
             const active = subTab === item.id
             return (
               <button
@@ -450,7 +407,9 @@ export const SettingsPage: React.FC = () => {
           aria-labelledby={`settings-tab-${subTab}`}
           className="min-w-0 w-full"
         >
-          {loading ? (
+          {subTab === 'admins' ? (
+            <AccountsPanel admin={admin} onSignedOut={onSignedOut} />
+          ) : loading ? (
             <LoadingState label={t('settings.loading')} />
           ) : loadError ? (
             <div role="alert" className="rounded-xl border border-rose-200 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 p-5 text-sm text-rose-700 dark:text-rose-300">
@@ -1128,170 +1087,11 @@ export const SettingsPage: React.FC = () => {
                 </div>
               )}
 
-              {subTab === 'admins' && (
-                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-                  <div>
-                    <h2 className="font-semibold text-slate-900 dark:text-slate-100">{t('settings.adminsTitle')}</h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t('settings.adminsDesc')}</p>
-                  </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      {admins.map((a) => (
-                        <div key={a.id} className="flex flex-wrap gap-3 items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg text-sm border border-slate-100 dark:border-slate-800">
-                          <div>
-                            <div className="font-medium text-slate-900 dark:text-slate-100">{a.username}</div>
-                            <div className="text-xs text-slate-400">{t('settings.lastLogin', { time: formatTime(a.last_login_at, lang) })}</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <StatusBadge value={a.is_active ? 'enabled' : 'disabled'} label={a.is_active ? t('common.enable') : t('common.disable')} />
-                            <button
-                              onClick={() => { setResetAdmin(a); setResetPassword('') }}
-                              className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
-                            >
-                              {t('settings.resetPassword')}
-                            </button>
-                            <button
-                              onClick={async () => {
-                                if (a.is_active && !await askConfirm(t('settings.disableAdminConfirm', { name: a.username }), { confirmText: t('common.disable'), danger: true })) return
-                                try {
-                                  await api.updateAdmin(a.id, { is_active: !a.is_active })
-                                  toast.success(t('settings.toggledAdminToast', { action: a.is_active ? t('common.disable') : t('common.enable'), name: a.username }))
-                                  const res = await api.listAdmins()
-                                  setAdmins(res.items || [])
-                                } catch (e: any) {
-                                  toast.error(e.message || t('settings.updateAdminError'))
-                                }
-                              }}
-                              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-                            >
-                              {a.is_active ? t('common.disable') : t('common.enable')}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="space-y-4">
-                      <form onSubmit={handleCreateAdmin} className="space-y-2.5 text-sm border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                        <div className="font-medium text-slate-800 dark:text-slate-100">{t('settings.addAdminTitle')}</div>
-                        <input
-                          required
-                          minLength={3}
-                          aria-label={t('settings.newAdminUserAria')}
-                          autoComplete="off"
-                          placeholder={t('auth.username')}
-                          value={newAdminUser}
-                          onChange={(e) => setNewAdminUser(e.target.value)}
-                          className="w-full px-3 py-1.5 border rounded-lg"
-                        />
-                        <input
-                          type="password"
-                          required
-                          minLength={8}
-                          aria-label={t('settings.newAdminPassAria')}
-                          autoComplete="new-password"
-                          placeholder={t('settings.passwordGe8')}
-                          value={newAdminPass}
-                          onChange={(e) => setNewAdminPass(e.target.value)}
-                          className="w-full px-3 py-1.5 border rounded-lg"
-                        />
-                        <button
-                          type="submit"
-                          disabled={creatingAdmin || newAdminUser.trim().length < 3 || newAdminPass.length < 8}
-                          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium"
-                        >
-                          {creatingAdmin ? t('settings.addingAdmin') : t('settings.addAdminBtn')}
-                        </button>
-                      </form>
-                      <form onSubmit={handleChangeOwnPassword} className="space-y-2.5 text-sm border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                        <div className="font-medium text-slate-800 dark:text-slate-100">{t('settings.changeOwnPwdTitle')}</div>
-                        <input
-                          type="password"
-                          required
-                          aria-label={t('settings.currentPwd')}
-                          autoComplete="current-password"
-                          placeholder={t('settings.currentPwd')}
-                          value={oldPwd}
-                          onChange={(e) => setOldPwd(e.target.value)}
-                          className="w-full px-3 py-1.5 border rounded-lg"
-                        />
-                        <input
-                          type="password"
-                          required
-                          minLength={8}
-                          aria-label={t('settings.newPwd')}
-                          autoComplete="new-password"
-                          placeholder={t('settings.newPwdGe8')}
-                          value={newPwd}
-                          onChange={(e) => setNewPwd(e.target.value)}
-                          className="w-full px-3 py-1.5 border rounded-lg"
-                        />
-                        <button
-                          type="submit"
-                          disabled={changingOwnPwd || !oldPwd || newPwd.length < 8}
-                          className="px-4 py-1.5 bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-500 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium"
-                        >
-                          {changingOwnPwd ? t('settings.updatingPwd') : t('settings.updatePwdBtn')}
-                        </button>
-                      </form>
-                    </div>
-                  </div>
-                </div>
-              )}
             </>
           )}
         </section>
       </div>
 
-      {resetAdmin && (
-        <Modal title={t('settings.resetModalTitle')} onClose={() => setResetAdmin(null)} busy={resettingPassword} size="md">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{t('settings.resetModalTitle')}</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400">{t('settings.resetModalDesc', { name: resetAdmin.username })}</p>
-            <form
-              className="space-y-4"
-              onSubmit={async (event) => {
-                event.preventDefault()
-                if (resettingPassword || resetPassword.length < 8) return
-                setResettingPassword(true)
-                try {
-                  await api.updateAdmin(resetAdmin.id, { password: resetPassword })
-                  setResetAdmin(null)
-                  setResetPassword('')
-                  toast.success(t('settings.resetSuccessToast'))
-                } catch (e: any) {
-                  toast.error(e.message || t('settings.resetErrorToast'))
-                } finally {
-                  setResettingPassword(false)
-                }
-              }}
-            >
-              <div>
-                <label htmlFor="admin-reset-password" className="block text-xs text-slate-600 dark:text-slate-300 mb-2">
-                  {t('settings.resetModalLabel')}
-                </label>
-                <input
-                  id="admin-reset-password"
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={8}
-                  required
-                  value={resetPassword}
-                  onChange={(event) => setResetPassword(event.target.value)}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div className="flex justify-end gap-2 border-t border-slate-200 dark:border-slate-800 pt-4">
-                <button type="button" disabled={resettingPassword} onClick={() => setResetAdmin(null)} className="px-4 py-2 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-sm">
-                  {t('common.cancel')}
-                </button>
-                <button type="submit" disabled={resettingPassword || resetPassword.length < 8} className="primary-button disabled:opacity-40">
-                  {resettingPassword ? t('common.saving') : t('settings.resetConfirmBtn')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </Modal>
-      )}
     </div>
   )
 }

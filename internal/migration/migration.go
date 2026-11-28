@@ -115,6 +115,7 @@ type AdminRecord struct {
 	ID                 string     `json:"id"`
 	Username           string     `json:"username"`
 	PasswordHash       string     `json:"password_hash"`
+	Role               string     `json:"role"`
 	IsActive           bool       `json:"is_active"`
 	MustChangePassword bool       `json:"must_change_password,omitempty"`
 	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
@@ -307,6 +308,7 @@ func (s *Service) Export(ctx context.Context, opts ExportOptions) ([]byte, error
 				ID:                 a.ID,
 				Username:           a.Username,
 				PasswordHash:       a.PasswordHash,
+				Role:               a.Role,
 				IsActive:           a.IsActive,
 				MustChangePassword: a.MustChangePassword,
 				LastLoginAt:        a.LastLoginAt,
@@ -802,6 +804,13 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 	// 6. Optional Admins (handle username uniqueness safely)
 	if opts.IncludeAdmins && b.Includes.Admins {
 		for _, a := range b.Data.Admins {
+			// 旧迁移包没有角色字段，按既有管理员身份导入。
+			if a.Role == "" {
+				a.Role = db.RoleAdmin
+			}
+			if a.Role != db.RoleAdmin && a.Role != db.RoleViewer {
+				return nil, fmt.Errorf("invalid account role")
+			}
 			var existingByID, existingByUser string
 			_ = tx.QueryRowContext(ctx, `SELECT id FROM admins WHERE id = ?`, a.ID).Scan(&existingByID)
 			_ = tx.QueryRowContext(ctx, `SELECT id FROM admins WHERE username = ?`, a.Username).Scan(&existingByUser)
@@ -814,14 +823,27 @@ func (s *Service) Import(ctx context.Context, encrypted []byte, opts ImportOptio
 				targetID = existingByUser
 			}
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO admins(id, username, password_hash, is_active, must_change_password, last_login_at, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash, is_active=excluded.is_active, must_change_password=excluded.must_change_password, updated_at=excluded.updated_at`,
-				targetID, a.Username, a.PasswordHash, boolInt(a.IsActive), boolInt(a.MustChangePassword), a.LastLoginAt, a.CreatedAt, a.UpdatedAt,
+				`INSERT INTO admins(id, username, password_hash, is_active, must_change_password, last_login_at, created_at, updated_at, role)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash, is_active=excluded.is_active, must_change_password=excluded.must_change_password, updated_at=excluded.updated_at, role=excluded.role`,
+				targetID, a.Username, a.PasswordHash, boolInt(a.IsActive), boolInt(a.MustChangePassword), a.LastLoginAt, a.CreatedAt, a.UpdatedAt, a.Role,
 			); err != nil {
 				return nil, err
 			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE admin_id = ?`, targetID); err != nil {
+				return nil, err
+			}
 			counts.Admins++
+		}
+	}
+
+	if counts.Admins > 0 {
+		var activeAdmins int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins WHERE role = 'admin' AND is_active = 1`).Scan(&activeAdmins); err != nil {
+			return nil, err
+		}
+		if activeAdmins == 0 {
+			return nil, db.ErrLastAdmin
 		}
 	}
 

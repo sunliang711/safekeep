@@ -1,6 +1,7 @@
 import { getCurrentLang, type Lang } from './contexts/I18nContext'
 import type {
   Admin,
+  AdminSession,
   AuditLog,
   BackupTask,
   Client,
@@ -113,6 +114,9 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ old_password, new_password }),
     }),
+
+  listSessions: () => req<{ items: AdminSession[] }>('/admin/api/v1/auth/sessions'),
+  revokeSession: (id: string) => req(`/admin/api/v1/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   dashboard: () => req<DashboardSummary>('/admin/api/v1/dashboard/summary'),
 
@@ -230,9 +234,9 @@ export const api = {
     }),
   resetCircuitBreaker: () => req<DailyTraffic>('/admin/api/v1/circuit-breaker/reset', { method: 'POST' }),
   listAdmins: () => req<{ items: Admin[] }>('/admin/api/v1/admins'),
-  createAdmin: (username: string, password: string) =>
-    req<Admin>('/admin/api/v1/admins', { method: 'POST', body: JSON.stringify({ username, password }) }),
-  updateAdmin: (id: string, payload: { is_active?: boolean; password?: string }) =>
+  createAdmin: (username: string, password: string, role: Admin['role'], current_password: string) =>
+    req<Admin>('/admin/api/v1/admins', { method: 'POST', body: JSON.stringify({ username, password, role, current_password }) }),
+  updateAdmin: (id: string, payload: { is_active?: boolean; password?: string; role?: Admin['role']; current_password: string }) =>
     req<Admin>(`/admin/api/v1/admins/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
 
   exportMigration: async (payload: {
